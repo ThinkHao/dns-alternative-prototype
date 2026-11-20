@@ -1,0 +1,19 @@
+services:
+  dns-alternative:
+    build: .
+    restart: unless-stopped
+    environment:
+      DNS_ALT_API_HOST: 0.0.0.0
+      DNS_ALT_API_PORT: 8765
+      DNS_ALT_DNS_HOST: 0.0.0.0
+      DNS_ALT_DNS_PORT: 15300
+      DNS_ALT_DB_PATH: /data/dns-alternative-prototype.sqlite3
+    ports:
+      - "127.0.0.1:${DNS_ALT_API_PORT:-8765}:8765/tcp"
+      - "${DNS_ALT_BIND_ADDRESS:-127.0.0.1}:${DNS_ALT_HOST_DNS_PORT:-15300}:15300/udp"
+      - "${DNS_ALT_BIND_ADDRESS:-127.0.0.1}:${DNS_ALT_HOST_DNS_PORT:-15300}:15300/tcp"
+    volumes:
+      - dns-data:/data
+
+volumes:
+  dns-data:

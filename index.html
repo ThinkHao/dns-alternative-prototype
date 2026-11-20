@@ -1,0 +1,587 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f4f6f8">
+  <title>域衡 DNS · 控制台原型</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --canvas: #f4f6f8;
+      --surface: #ffffff;
+      --sidebar: #fbfcfd;
+      --ink: #182230;
+      --muted: #687586;
+      --line: #e4e9ef;
+      --blue: #2459d3;
+      --blue-soft: #edf3ff;
+      --green: #16845b;
+      --green-soft: #eaf7f0;
+      --amber: #a86c08;
+      --amber-soft: #fff4df;
+      --red: #c23d48;
+      --radius: 10px;
+      font-family: Inter, "Segoe UI", "Microsoft YaHei", sans-serif;
+      font-synthesis: none;
+      text-rendering: optimizeLegibility;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-width: 900px; background: var(--canvas); color: var(--ink); font-size: 13px; }
+    button, input, select { font: inherit; }
+    button { cursor: pointer; }
+    .shell { min-height: 100vh; display: grid; grid-template-columns: 224px minmax(0, 1fr); }
+    .sidebar { background: var(--sidebar); border-right: 1px solid var(--line); padding: 22px 14px 16px; display: flex; flex-direction: column; }
+    .brand { display: flex; align-items: center; gap: 11px; padding: 0 10px 24px; }
+    .brand-mark { width: 34px; height: 34px; border-radius: 9px; background: #1d4fc2; color: #fff; display: grid; place-items: center; font-size: 17px; font-weight: 750; letter-spacing: -1px; }
+    .brand-name { font-size: 15px; font-weight: 720; letter-spacing: .2px; }
+    .brand-sub { color: var(--muted); font-size: 10px; margin-top: 3px; }
+    .nav-label { padding: 7px 11px 8px; color: #8a95a3; font-size: 10px; letter-spacing: .8px; text-transform: uppercase; }
+    .nav { display: grid; gap: 3px; }
+    .nav button { width: 100%; border: 0; background: transparent; color: #586576; border-radius: 7px; text-align: left; padding: 10px 11px; display: flex; align-items: center; gap: 11px; transition: background .16s, color .16s, transform .16s; }
+    .nav button:hover { background: #f0f3f7; color: var(--ink); transform: translateX(2px); }
+    .nav button.active { background: var(--blue-soft); color: #1748b5; font-weight: 650; }
+    .nav-icon { display: inline-grid; place-items: center; width: 17px; color: currentColor; font-size: 15px; }
+    .sidebar-bottom { margin-top: auto; padding: 14px 10px 0; border-top: 1px solid var(--line); }
+    .demo-note { display: flex; gap: 8px; align-items: flex-start; color: #7b5a21; font-size: 11px; line-height: 1.55; background: #fff8e9; border: 1px solid #f2e6c8; border-radius: 8px; padding: 10px; }
+    .demo-dot { width: 7px; height: 7px; background: #d99a27; border-radius: 50%; margin-top: 4px; flex: 0 0 auto; }
+    main { min-width: 0; padding: 0 30px 34px; }
+    .topbar { height: 62px; border-bottom: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; margin: 0 -30px 27px; padding: 0 30px; background: rgba(255,255,255,.68); }
+    .crumb { display: flex; align-items: center; gap: 9px; color: var(--muted); font-size: 12px; }
+    .crumb strong { color: var(--ink); font-weight: 620; }
+    .top-actions { display: flex; align-items: center; gap: 12px; }
+    .runtime { color: var(--muted); font-size: 11px; }
+    .user { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; background: #e9eef6; color: #45556e; font-weight: 650; font-size: 11px; }
+    .page { animation: appear .22s ease-out; }
+    @keyframes appear { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+    .page-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 18px; margin-bottom: 22px; }
+    h1 { margin: 0; font-size: 23px; line-height: 1.2; letter-spacing: -.45px; font-weight: 690; }
+    .lead { color: var(--muted); margin: 7px 0 0; font-size: 12px; }
+    .head-right { display: flex; align-items: center; gap: 10px; }
+    .state-label { display: inline-flex; align-items: center; gap: 7px; border: 1px solid #dce9e2; color: #347456; background: #f4fbf7; border-radius: 20px; padding: 6px 10px; font-size: 11px; }
+    .state-label i { width: 6px; height: 6px; background: #31a46f; border-radius: 50%; }
+    .btn { border: 1px solid #d7dee7; color: #334155; background: #fff; border-radius: 7px; height: 34px; padding: 0 12px; font-weight: 590; transition: background .15s, border-color .15s, transform .15s; }
+    .btn:hover { background: #f7f9fc; border-color: #b9c5d4; }
+    .btn:active { transform: translateY(1px); }
+    .btn-primary { border-color: var(--blue); color: #fff; background: var(--blue); }
+    .btn-primary:hover { border-color: #1748b5; background: #1748b5; }
+    .btn-quiet { border-color: transparent; background: transparent; color: var(--blue); padding: 0 7px; }
+    .metrics { display: grid; grid-template-columns: repeat(4, minmax(120px, 1fr)); border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); margin-bottom: 22px; }
+    .metric { padding: 15px 18px 14px; min-height: 82px; border-right: 1px solid var(--line); }
+    .metric:last-child { border-right: 0; }
+    .metric-label { color: var(--muted); font-size: 11px; }
+    .metric-value { font-size: 21px; letter-spacing: -.5px; font-weight: 680; margin-top: 8px; }
+    .metric-foot { font-size: 10px; margin-top: 3px; color: #8893a1; }
+    .metric-foot.good { color: var(--green); }
+    .overview-grid { display: grid; grid-template-columns: minmax(0, 1.22fr) minmax(290px, .78fr); gap: 18px; margin-bottom: 20px; }
+    .section { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); min-width: 0; }
+    .section-head { display: flex; align-items: center; justify-content: space-between; padding: 15px 17px 12px; border-bottom: 1px solid var(--line); }
+    .section-head h2 { margin: 0; font-size: 13px; font-weight: 660; }
+    .section-meta { color: #8994a1; font-size: 10px; }
+    .section-body { padding: 0 17px 15px; }
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; text-align: left; white-space: nowrap; }
+    th { color: #8692a0; font-weight: 540; font-size: 10px; padding: 11px 9px; border-bottom: 1px solid #edf0f3; }
+    td { padding: 11px 9px; border-bottom: 1px solid #f0f2f5; color: #394658; font-size: 11px; }
+    tbody tr { transition: background .14s; }
+    tbody tr:hover { background: #f8fafc; }
+    tbody tr:last-child td { border-bottom: 0; }
+    .name { color: #202c3b; font-weight: 610; }
+    .sub { color: #8a95a2; display: block; font-size: 10px; margin-top: 3px; }
+    .status { display: inline-flex; align-items: center; gap: 6px; font-size: 10px; }
+    .status::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: #21a16b; }
+    .status.warn::before { background: #db992a; }
+    .status.off::before { background: #c8ced7; }
+    .chart-box { padding: 14px 17px 8px; }
+    .chart-summary { display: flex; justify-content: space-between; align-items: flex-start; }
+    .chart-big { font-size: 26px; font-weight: 690; letter-spacing: -1px; }
+    .chart-caption { color: var(--muted); font-size: 10px; margin-top: 4px; }
+    .chart-delta { color: var(--green); background: var(--green-soft); padding: 5px 7px; border-radius: 5px; font-size: 10px; }
+    .chart { width: 100%; height: 100px; margin-top: 7px; overflow: visible; }
+    .chart-grid { stroke: #e8edf2; stroke-width: 1; }
+    .chart-area { fill: url(#fade); }
+    .chart-line { fill: none; stroke: #2b65d9; stroke-width: 2.3; stroke-linecap: round; stroke-linejoin: round; }
+    .chart-labels { display: flex; justify-content: space-between; color: #929ca8; font-size: 9px; margin-top: 0; }
+    .bottom-grid { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(275px, .8fr); gap: 18px; }
+    .policy-list { padding: 2px 17px 8px; }
+    .policy-row { display: grid; grid-template-columns: minmax(130px, 1.1fr) minmax(110px, .9fr) minmax(80px, .6fr) auto; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid #f0f2f5; }
+    .policy-row:last-child { border-bottom: 0; }
+    .policy-title { font-size: 11px; font-weight: 620; color: #253142; }
+    .policy-match, .policy-target { color: var(--muted); font-size: 10px; overflow: hidden; text-overflow: ellipsis; }
+    .tag { display: inline-block; color: #53647a; background: #f0f3f7; border-radius: 4px; padding: 4px 6px; font-size: 9px; }
+    .event-list { list-style: none; padding: 3px 17px 7px; margin: 0; }
+    .event-list li { position: relative; padding: 10px 0 10px 15px; border-bottom: 1px solid #f0f2f5; color: #4d5969; font-size: 10px; line-height: 1.5; }
+    .event-list li:last-child { border-bottom: 0; }
+    .event-list li::before { content: ""; position: absolute; left: 1px; top: 15px; width: 5px; height: 5px; border-radius: 50%; background: #91a3bb; }
+    .event-time { display: block; color: #98a1ad; font-size: 9px; margin-top: 3px; }
+    .demo-strip { display: flex; gap: 8px; align-items: center; margin-top: 18px; padding: 10px 13px; border: 1px solid #ebdfc6; border-radius: 8px; color: #775a2a; background: #fffaf0; font-size: 10px; }
+    .demo-strip strong { font-weight: 680; }
+    .filter { height: 32px; border: 1px solid var(--line); border-radius: 6px; padding: 0 9px; min-width: 220px; color: var(--ink); outline: none; }
+    .filter:focus, .field input:focus, .field select:focus { border-color: #8aa9ef; box-shadow: 0 0 0 3px #e9efff; }
+    .toolbar { display: flex; align-items: center; gap: 8px; }
+    .content-table { margin-top: 14px; }
+    .content-table th { padding: 12px 12px; }
+    .content-table td { padding: 13px 12px; }
+    .row-action { color: var(--blue); background: transparent; border: 0; padding: 3px 4px; font-size: 10px; }
+    .empty { padding: 30px 12px; text-align: center; color: #84909e; font-size: 11px; }
+    .hidden { display: none !important; }
+    dialog { width: min(540px, calc(100vw - 32px)); border: 1px solid #dce2e9; border-radius: 12px; padding: 0; color: var(--ink); box-shadow: 0 22px 70px rgba(20, 35, 58, .2); opacity: 0; transform: translateY(8px) scale(.99); transition: opacity .16s ease, transform .16s ease; }
+    dialog[open] { opacity: 1; transform: translateY(0) scale(1); }
+    dialog::backdrop { background: rgba(19, 31, 49, .30); backdrop-filter: blur(2px); }
+    .modal-head { display: flex; justify-content: space-between; align-items: flex-start; padding: 19px 21px 14px; border-bottom: 1px solid var(--line); }
+    .modal-head h3 { margin: 0; font-size: 15px; }
+    .modal-head p { margin: 5px 0 0; color: var(--muted); font-size: 10px; }
+    .close { border: 0; background: transparent; color: #7c8795; font-size: 20px; line-height: 1; padding: 0 2px; }
+    .modal-body { padding: 18px 21px 20px; }
+    .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 12px; }
+    .field { display: grid; gap: 6px; }
+    .field.full { grid-column: 1 / -1; }
+    .field label { color: #5b6878; font-size: 10px; }
+    .field input, .field select { height: 35px; border: 1px solid #dfe5eb; border-radius: 6px; background: #fff; padding: 0 9px; outline: none; color: var(--ink); }
+    .field textarea { min-height: 82px; resize: vertical; border: 1px solid #dfe5eb; border-radius: 6px; background: #fff; padding: 9px; outline: none; color: var(--ink); font-family: inherit; }
+    .field input[type="checkbox"] { width: 14px; height: 14px; vertical-align: middle; margin-right: 6px; }
+    .field input::placeholder { color: #a5aeb9; }
+    .form-error { color: var(--red); font-size: 10px; min-height: 13px; margin-top: 9px; }
+    .modal-foot { display: flex; justify-content: flex-end; gap: 8px; padding-top: 13px; border-top: 1px solid #edf0f3; margin-top: 15px; }
+    .preview-box { border: 1px solid var(--line); border-radius: 7px; overflow: hidden; margin-top: 14px; }
+    .preview-line { display: flex; justify-content: space-between; gap: 12px; padding: 10px 11px; font-size: 10px; border-bottom: 1px solid #edf0f3; }
+    .preview-line:last-child { border-bottom: 0; }
+    .preview-line span:first-child { color: var(--muted); }
+    .preview-tabs { display: flex; gap: 6px; margin-top: 13px; }
+    .preview-tabs button { border: 1px solid var(--line); border-radius: 6px; background: #fff; padding: 7px 10px; color: var(--muted); cursor: pointer; font: inherit; font-size: 10px; }
+    .preview-tabs button.active { color: var(--blue); border-color: #b8d0f7; background: #f2f7ff; }
+    .preview-warnings { color: #765c22; background: #fff9e9; border: 1px solid #f0e1b7; border-radius: 7px; padding: 9px 11px; margin-top: 9px; font-size: 10px; line-height: 1.6; }
+    .preview-warnings:empty { display: none; }
+    .code-preview { white-space: pre-wrap; background: #f7f9fb; border: 1px solid var(--line); border-radius: 7px; padding: 12px; margin-top: 13px; color: #3c4a5d; font: 10px/1.6 Consolas, monospace; }
+    .toast { position: fixed; right: 24px; bottom: 22px; background: #243347; color: #fff; padding: 11px 14px; border-radius: 7px; box-shadow: 0 8px 25px #1723342a; opacity: 0; transform: translateY(8px); pointer-events: none; transition: .2s ease; font-size: 11px; z-index: 10; }
+    .toast.show { opacity: 1; transform: translateY(0); }
+    @media (max-width: 1080px) { main { padding-left: 20px; padding-right: 20px; } .topbar { margin-left: -20px; margin-right: -20px; padding: 0 20px; } .overview-grid, .bottom-grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">域</div>
+        <div><div class="brand-name">域衡 DNS</div><div class="brand-sub">解析服务控制面</div></div>
+      </div>
+      <div class="nav-label">工作区</div>
+      <nav class="nav" aria-label="主导航">
+        <button class="active" data-page="overview"><span class="nav-icon">◫</span>运行总览</button>
+        <button data-page="policies"><span class="nav-icon">⌘</span>解析策略</button>
+        <button data-page="upstreams"><span class="nav-icon">⇄</span>上游组</button>
+        <button data-page="zones"><span class="nav-icon">◎</span>权威域名</button>
+        <button data-page="nodes"><span class="nav-icon">▤</span>节点集群</button>
+        <button data-page="logs"><span class="nav-icon">≋</span>查询日志</button>
+        <button data-page="audit"><span class="nav-icon">◷</span>变更记录</button>
+      </nav>
+      <div class="sidebar-bottom">
+        <div class="demo-note"><span class="demo-dot"></span><span><strong>本机 MVP</strong><br>DNS 只监听回环地址</span></div>
+      </div>
+    </aside>
+
+    <main>
+      <header class="topbar">
+        <div class="crumb"><span>控制台</span><span>›</span><strong id="crumbTitle">运行总览</strong></div>
+        <div class="top-actions"><span class="runtime">本地原型 · <span id="clock"></span></span><div class="user" title="演示操作员">运</div></div>
+      </header>
+
+      <section class="page" data-view="overview">
+        <div class="page-head">
+          <div><h1>运行总览</h1><p class="lead">解析节点、流量趋势与策略命中概况</p></div>
+          <div class="head-right"><span class="state-label"><i></i><span id="runtimeStatus">本机原型 · 模拟状态</span></span><button class="btn" onclick="openPreview()">预览并校验</button></div>
+        </div>
+        <div class="metrics">
+          <div class="metric"><div class="metric-label">样例解析速率</div><div class="metric-value">183,420 <small style="font-size:11px;font-weight:550">QPS</small></div><div class="metric-foot">样例数据 · 最近 1 分钟</div></div>
+          <div class="metric"><div class="metric-label">在线解析节点</div><div class="metric-value">6 <small style="font-size:12px;font-weight:550;color:#8591a0">/ 6</small></div><div class="metric-foot good">所有示例节点健康</div></div>
+          <div class="metric"><div class="metric-label">权威区域</div><div class="metric-value" id="zoneCount">82</div><div class="metric-foot">样例数据 · 主从同步正常</div></div>
+          <div class="metric"><div class="metric-label">待审核策略</div><div class="metric-value" id="pendingCount">0</div><div class="metric-foot">启用后作用于本机 DNS</div></div>
+        </div>
+        <div class="overview-grid">
+          <section class="section">
+            <div class="section-head"><h2>解析节点</h2><span class="section-meta">样例集群 · 最近更新 18 秒前</span></div>
+            <div class="section-body table-wrap"><table><thead><tr><th>节点</th><th>角色</th><th>地址</th><th>解析速率</th><th>状态</th></tr></thead><tbody id="overviewNodes"></tbody></table></div>
+          </section>
+          <section class="section">
+            <div class="section-head"><h2>查询趋势</h2><span class="section-meta">过去 60 分钟</span></div>
+            <div class="chart-box">
+              <div class="chart-summary"><div><div class="chart-big">183.4k</div><div class="chart-caption">平均查询 / 秒 · 样例数据</div></div><div class="chart-delta">+4.8%</div></div>
+              <svg class="chart" viewBox="0 0 420 105" preserveAspectRatio="none" aria-label="示例 DNS 查询趋势">
+                <defs><linearGradient id="fade" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#3c73df" stop-opacity=".16"/><stop offset="1" stop-color="#3c73df" stop-opacity="0"/></linearGradient></defs>
+                <path class="chart-grid" d="M0 20H420M0 52H420M0 84H420"/><path class="chart-area" d="M0 74 L24 68 L48 72 L72 53 L96 59 L120 46 L144 51 L168 37 L192 44 L216 49 L240 31 L264 37 L288 24 L312 34 L336 28 L360 42 L384 32 L408 19 L420 23 L420 100 L0 100Z"/>
+                <path class="chart-line" d="M0 74 L24 68 L48 72 L72 53 L96 59 L120 46 L144 51 L168 37 L192 44 L216 49 L240 31 L264 37 L288 24 L312 34 L336 28 L360 42 L384 32 L408 19 L420 23"/>
+              </svg>
+              <div class="chart-labels"><span>10:00</span><span>10:15</span><span>10:30</span><span>10:45</span><span>11:00</span></div>
+            </div>
+          </section>
+        </div>
+        <div class="bottom-grid">
+          <section class="section">
+            <div class="section-head"><h2>重点解析策略</h2><button class="btn-quiet" onclick="navigate('policies')">查看全部 →</button></div>
+            <div class="policy-list" id="overviewPolicies"></div>
+          </section>
+          <section class="section">
+            <div class="section-head"><h2>最近变更</h2><button class="btn-quiet" onclick="navigate('audit')">审计记录 →</button></div>
+            <ul class="event-list" id="overviewEvents"></ul>
+          </section>
+        </div>
+        <div class="demo-strip"><strong>演示数据</strong><span>图表、节点状态和解析速率均为静态样例，不代表真实设备性能。</span></div>
+      </section>
+
+      <section class="page hidden" data-view="policies">
+        <div class="page-head"><div><h1>解析策略</h1><p class="lead">按客户端网段与域名匹配，返回固定记录或转发到上游组</p></div><div class="head-right"><button class="btn" onclick="openPreview()">预览并校验</button><button class="btn btn-primary" onclick="openPolicyModal()">＋ 新建策略</button></div></div>
+        <div class="section"><div class="section-head"><h2>策略列表 <span class="section-meta" id="policyTotal"></span></h2><div class="toolbar"><input class="filter" id="policyFilter" placeholder="搜索策略、域名或网段" aria-label="搜索解析策略"></div></div><div class="section-body table-wrap content-table"><table><thead><tr><th>策略名称</th><th>匹配条件</th><th>线路 / 目标</th><th>优先级</th><th>TTL</th><th>状态</th><th></th></tr></thead><tbody id="policyTable"></tbody></table></div></div>
+        <div class="demo-strip"><strong>运行范围</strong><span>启用/停用会立即影响本机 DNS 查询；不会下发到其他节点。</span></div>
+      </section>
+
+      <section class="page hidden" data-view="zones">
+        <div class="page-head"><div><h1>权威域名</h1><p class="lead">区域与记录集中管理 · 导入和发布流程待接入 DNS 引擎</p></div><div class="head-right"><button class="btn" onclick="toast('原型阶段：区域导入尚未连接')">导入区域</button><button class="btn btn-primary" onclick="toast('原型阶段：新增区域流程待接入')">＋ 新建区域</button></div></div>
+        <div class="section"><div class="section-head"><h2>区域列表</h2><span class="section-meta">示例区域 · 82 个</span></div><div class="section-body table-wrap content-table"><table><thead><tr><th>域名</th><th>类型</th><th>记录数</th><th>主节点</th><th>同步状态</th><th>最近更新</th></tr></thead><tbody>
+          <tr><td class="name">campus.example.edu.cn</td><td>主区域</td><td>148</td><td>auth-01</td><td><span class="status">已同步</span></td><td>今天 10:42</td></tr>
+          <tr><td class="name">library.example.edu.cn</td><td>主区域</td><td>62</td><td>auth-01</td><td><span class="status">已同步</span></td><td>今天 09:18</td></tr>
+          <tr><td class="name">research.example.edu.cn</td><td>次区域</td><td>93</td><td>auth-02</td><td><span class="status warn">同步延迟</span></td><td>今天 08:54</td></tr>
+          <tr><td class="name">in-addr.arpa</td><td>主区域</td><td>1,204</td><td>auth-01</td><td><span class="status">已同步</span></td><td>昨天 21:05</td></tr>
+        </tbody></table></div></div>
+        <div class="demo-strip"><strong>范围说明</strong><span>本原型展示区域目录；SOA、DNSSEC、AXFR/IXFR 等行为须在引擎选型后验证。</span></div>
+      </section>
+
+      <section class="page hidden" data-view="upstreams">
+        <div class="page-head"><div><h1>上游组</h1><p class="lead">配置 DNS 转发目标，并选择未命中策略时的默认组</p></div><div class="head-right"><button class="btn btn-primary" onclick="openUpstreamModal()">＋ 新建上游组</button></div></div>
+        <div class="section"><div class="section-head"><h2>DNS 上游清单 <span class="section-meta" id="upstreamTotal"></span></h2><span class="section-meta">最多 8 个 IPv4 地址 / 组</span></div><div class="section-body table-wrap content-table"><table><thead><tr><th>组名</th><th>服务器地址</th><th>默认回退</th><th></th></tr></thead><tbody id="upstreamTable"></tbody></table></div></div>
+        <div class="demo-strip"><strong>当前运行时</strong><span id="dnsEndpointNote">只监听本机回环地址；没有预置公共上游，避免未经配置的外发查询。</span></div>
+      </section>
+
+      <section class="page hidden" data-view="nodes">
+        <div class="page-head"><div><h1>节点集群</h1><p class="lead">管理、递归与权威服务分角色部署</p></div><div class="head-right"><button class="btn" onclick="toast('已刷新样例状态')">刷新状态</button><button class="btn btn-primary" onclick="toast('原型阶段：节点注册流程待接入')">＋ 注册节点</button></div></div>
+        <div class="section"><div class="section-head"><h2>节点清单</h2><span class="section-meta">模拟集群 · 6 个节点</span></div><div class="section-body table-wrap content-table"><table><thead><tr><th>节点名称</th><th>角色</th><th>地址</th><th>版本</th><th>CPU</th><th>内存</th><th>状态</th></tr></thead><tbody id="nodeTable"></tbody></table></div></div>
+        <div class="demo-strip"><strong>运行原则</strong><span>管理面短时不可用时，解析节点继续使用最近一次校验通过的配置。</span></div>
+      </section>
+
+      <section class="page hidden" data-view="logs">
+        <div class="page-head"><div><h1>查询日志</h1><p class="lead">检索本机 DNS 查询的客户端、域名、记录类型和响应码</p></div><div class="head-right"><button class="btn" onclick="loadServerState()">刷新</button><button class="btn" onclick="toast('日志导出待接入')">导出</button></div></div>
+        <div class="section"><div class="section-head"><h2>最近请求</h2><div class="toolbar"><input class="filter" id="logFilter" placeholder="搜索域名或客户端 IP" aria-label="搜索查询日志"></div></div><div class="section-body table-wrap content-table"><table><thead><tr><th>时间</th><th>客户端</th><th>查询名称</th><th>类型</th><th>响应</th><th>线路</th><th>耗时</th></tr></thead><tbody id="logTable"></tbody></table></div></div>
+        <div class="demo-strip"><strong>日志说明</strong><span>本机 API 模式显示真实本机请求；直接打开静态页面时显示样例数据，最多保留最近 2000 条。</span></div>
+      </section>
+
+      <section class="page hidden" data-view="audit">
+        <div class="page-head"><div><h1>变更记录</h1><p class="lead">记录配置预览、校验、发布与回滚操作</p></div><div class="head-right"><button class="btn" onclick="toast('原型阶段：审计导出待接入')">导出记录</button></div></div>
+        <div class="section"><div class="section-head"><h2>操作时间线</h2><span class="section-meta">只展示本地原型会话内事件</span></div><ul class="event-list" id="auditEvents"></ul></div>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="policyModal">
+    <form id="policyForm">
+      <div class="modal-head"><div><h3>新建解析策略</h3><p>定义匹配条件与返回线路，保存为本地草稿</p></div><button class="close" type="button" onclick="closePolicyModal()" aria-label="关闭">×</button></div>
+      <div class="modal-body">
+        <div class="form-grid">
+          <div class="field full"><label for="pName">策略名称</label><input id="pName" name="name" required maxlength="48" placeholder="例如：教学平台移动出口"></div>
+          <div class="field"><label for="pDomain">域名后缀</label><input id="pDomain" name="domain" required placeholder="learn.example.edu.cn"></div>
+          <div class="field"><label for="pNetwork">客户端网段</label><input id="pNetwork" name="network" required placeholder="10.20.0.0/16"></div>
+          <div class="field"><label for="pLine">出口线路</label><select id="pLine" name="line"><option>教育网</option><option>中国电信</option><option>中国联通</option><option>中国移动</option><option>备用线路</option><option>内网</option></select></div>
+          <div class="field"><label for="pAction">解析动作</label><select id="pAction" name="action_type"><option value="answer">返回固定 A 记录</option><option value="forward">转发到上游组</option></select></div>
+          <div class="field"><label id="targetLabel" for="pTarget">A 记录返回地址（IPv4）</label><input id="pTarget" name="target" required placeholder="10.20.8.15"></div>
+          <datalist id="upstreamOptions"></datalist>
+          <div class="field"><label for="pPriority">策略优先级</label><input id="pPriority" name="priority" type="number" min="0" max="10000" value="100" required><span class="section-meta">数值越大越优先</span></div>
+          <div class="field"><label for="pTtl">TTL（秒）</label><input id="pTtl" name="ttl" type="number" min="1" max="86400" value="60" required></div>
+        </div>
+        <div class="form-error" id="formError" role="alert"></div>
+        <div class="modal-foot"><button class="btn" type="button" onclick="closePolicyModal()">取消</button><button class="btn btn-primary" type="submit">保存草稿</button></div>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="upstreamModal">
+    <form id="upstreamForm">
+      <div class="modal-head"><div><h3 id="upstreamModalTitle">新建上游组</h3><p>仅接受 IPv4 地址，可写端口；省略端口时默认 53</p></div><button class="close" type="button" onclick="closeUpstreamModal()" aria-label="关闭">×</button></div>
+      <div class="modal-body">
+        <div class="form-grid">
+          <div class="field full"><label for="uName">上游组名称</label><input id="uName" name="name" required maxlength="64" placeholder="例如：campus-upstream"></div>
+          <div class="field full"><label for="uServers">DNS 服务器（每行一个）</label><textarea id="uServers" name="servers" required placeholder="127.0.0.1:15353"></textarea></div>
+          <div class="field full"><label><input id="uDefault" name="is_default" type="checkbox"> 设为未命中时的默认回退组</label></div>
+        </div>
+        <div class="form-error" id="upstreamError" role="alert"></div>
+        <div class="modal-foot"><button class="btn" type="button" onclick="closeUpstreamModal()">取消</button><button class="btn btn-primary" type="submit">保存上游组</button></div>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="previewModal">
+    <div class="modal-head"><div><h3>配置预览与校验</h3><p>策略启停作用于本机 DNS；不会发布到外部解析节点</p></div><button class="close" onclick="document.getElementById('previewModal').close()" aria-label="关闭">×</button></div>
+    <div class="modal-body">
+      <div class="preview-box"><div class="preview-line"><span>配置来源</span><strong>本机期望配置</strong></div><div class="preview-line"><span>待发布策略</span><strong id="previewCount">0 条</strong></div><div class="preview-line"><span>校验状态</span><strong id="previewStatus" style="color:var(--green)">结构校验通过</strong></div><div class="preview-line"><span>生产发布</span><strong>未配置</strong></div></div>
+      <div class="preview-tabs"><button type="button" class="active" data-preview-kind="json" onclick="switchPreview('json')">期望配置 JSON</button><button type="button" data-preview-kind="dnsdist" onclick="switchPreview('dnsdist')">规则片段</button><button type="button" data-preview-kind="lab" onclick="switchPreview('lab')">本机 PoC 完整配置</button></div>
+      <div class="preview-warnings" id="previewWarnings"></div>
+      <pre class="code-preview" id="previewCode"></pre>
+      <div class="modal-foot"><button class="btn" onclick="document.getElementById('previewModal').close()">关闭</button><button class="btn" type="button" onclick="downloadLabConfig()">下载本机 PoC 配置</button><button class="btn btn-primary" onclick="simulatePublish()">模拟发布</button></div>
+    </div>
+  </dialog>
+  <div class="toast" id="toast" role="status"></div>
+
+  <script>
+    const state = {
+      pending: [],
+      events: [
+        { text: '样例集群完成状态同步', time: '今天 10:42:16 · 系统' },
+        { text: '策略「校园网默认递归」校验通过', time: '今天 10:38:04 · 管理员' },
+        { text: 'auth-02 区域数据同步完成', time: '今天 09:54:27 · 系统' }
+      ],
+      policies: [
+        { name: '校园网默认递归', match: '10.0.0.0/8 · 全域', network: '10.0.0.0/8', domain: '*.external', line: '教育网', action_type:'forward', target: 'campus-upstream', priority: 100, ttl: '300s', status: '待复核' },
+        { name: '教学平台优选线路', match: '10.20.0.0/16', network: '10.20.0.0/16', domain: 'learn.example.edu.cn', line: '中国联通', action_type:'answer', target: '10.20.8.15', priority: 200, ttl: '60s', status: '启用' },
+        { name: '图书馆内网访问', match: '10.30.0.0/16', network: '10.30.0.0/16', domain: 'library.example.edu.cn', line: '内网', action_type:'answer', target: '172.22.4.10', priority: 150, ttl: '120s', status: '启用' },
+        { name: '访客网络备用解析', match: '172.18.0.0/16', network: '172.18.0.0/16', domain: '*.external', line: '中国移动', action_type:'forward', target: 'guest-upstream', priority: 100, ttl: '180s', status: '待复核' }
+      ],
+      upstreams: [],
+      nodes: [
+        { name: 'control-01', role: '管理节点', ip: '10.10.1.11', qps: '—', cpu: '12%', mem: '38%', state: '在线' },
+        { name: 'recursor-01', role: '递归节点', ip: '10.10.2.21', qps: '46,218', cpu: '31%', mem: '52%', state: '在线' },
+        { name: 'recursor-02', role: '递归节点', ip: '10.10.2.22', qps: '43,905', cpu: '28%', mem: '49%', state: '在线' },
+        { name: 'recursor-03', role: '递归节点', ip: '10.10.2.23', qps: '45,812', cpu: '30%', mem: '51%', state: '在线' },
+        { name: 'auth-01', role: '权威节点', ip: '10.10.3.31', qps: '25,804', cpu: '18%', mem: '42%', state: '在线' },
+        { name: 'auth-02', role: '权威节点', ip: '10.10.3.32', qps: '21,681', cpu: '16%', mem: '39%', state: '在线' }
+      ],
+      logs: [
+        ['11:03:18.442','10.20.5.18','learn.example.edu.cn','A','NOERROR','中国联通','1.8 ms'],
+        ['11:03:18.391','10.30.8.62','library.example.edu.cn','AAAA','NOERROR','内网','1.2 ms'],
+        ['11:03:17.927','172.18.2.107','portal.example.com','A','NOERROR','中国移动','18.4 ms'],
+        ['11:03:17.821','10.20.9.41','video.example.net','HTTPS','NOERROR','教育网','21.7 ms'],
+        ['11:03:17.772','10.11.6.33','bad-domain.test','A','REFUSED','拦截策略','0.9 ms'],
+        ['11:03:17.615','10.20.5.18','learn.example.edu.cn','A','NOERROR','中国联通','1.7 ms']
+      ]
+    };
+    const titles = { overview: '运行总览', policies: '解析策略', upstreams: '上游组', zones: '权威域名', nodes: '节点集群', logs: '查询日志', audit: '变更记录' };
+    const esc = value => String(value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    const targetLabel = policy => policy.action_type === 'forward' ? `上游组 ${policy.target}` : `A ${policy.target}`;
+    function navigate(page) {
+      document.querySelectorAll('.nav button').forEach(button => button.classList.toggle('active', button.dataset.page === page));
+      document.querySelectorAll('.page').forEach(view => view.classList.toggle('hidden', view.dataset.view !== page));
+      document.getElementById('crumbTitle').textContent = titles[page];
+      render();
+    }
+    function render() {
+      const overviewNodes = state.nodes.filter((node, index) => index === 0 || node.name === 'recursor-01' || node.name === 'recursor-02' || node.name === 'auth-01');
+      document.getElementById('overviewNodes').innerHTML = overviewNodes.map(n => `<tr><td class="name">${esc(n.name)}</td><td>${esc(n.role)}</td><td>${esc(n.ip)}</td><td>${esc(n.qps)}${n.qps !== '—' ? ' QPS' : ''}</td><td><span class="status">${esc(n.state)}</span></td></tr>`).join('');
+      document.getElementById('nodeTable').innerHTML = state.nodes.map(n => `<tr><td class="name">${esc(n.name)}</td><td>${esc(n.role)}</td><td>${esc(n.ip)}</td><td>原型 0.1</td><td>${esc(n.cpu)}</td><td>${esc(n.mem)}</td><td><span class="status">${esc(n.state)}</span></td></tr>`).join('');
+      document.getElementById('overviewPolicies').innerHTML = state.policies.slice(0, 3).map(p => `<div class="policy-row"><div class="policy-title">${esc(p.name)}</div><div class="policy-match">${esc(p.domain)}<span class="sub">${esc(p.match)}</span></div><div class="policy-target">${esc(p.line)}<span class="sub">${esc(targetLabel(p))}</span></div><span class="tag">${esc(p.status)}</span></div>`).join('');
+      document.getElementById('overviewEvents').innerHTML = state.events.slice(0, 3).map(e => `<li>${esc(e.text)}<span class="event-time">${esc(e.time)}</span></li>`).join('');
+      const policyFilter = (document.getElementById('policyFilter')?.value || '').trim().toLowerCase();
+      const filtered = state.policies.filter(p => Object.values(p).join(' ').toLowerCase().includes(policyFilter));
+      document.getElementById('policyTotal').textContent = `· ${filtered.length} 条`;
+      document.getElementById('policyTable').innerHTML = filtered.length ? filtered.map(p => `<tr><td class="name">${esc(p.name)}</td><td>${esc(p.domain)}<span class="sub">${esc(p.match)}</span></td><td>${esc(p.line)}<span class="sub">${esc(targetLabel(p))}</span></td><td>${esc(p.priority ?? 100)}</td><td>${esc(p.ttl)}</td><td><span class="status ${p.status === '启用' ? '' : 'warn'}">${esc(p.status)}</span></td><td>${window.apiConnected && p.id ? `<button class="row-action" onclick="policyAction(${p.id}, '${p.status === '启用' ? 'disable' : 'enable'}')">${p.status === '启用' ? '停用' : '启用'}</button> <button class="row-action" onclick="policyAction(${p.id}, 'delete')">删除</button>` : '<span class="section-meta">静态样例</span>'}</td></tr>`).join('') : '<tr><td colspan="7" class="empty">没有匹配的策略</td></tr>';
+      const upstreamList = state.upstreams || [];
+      document.getElementById('upstreamTotal').textContent = `· ${upstreamList.length} 组`;
+      document.getElementById('upstreamTable').innerHTML = upstreamList.length ? upstreamList.map(group => `<tr><td class="name">${esc(group.name)}</td><td>${group.servers.map(server => `${esc(server.address)}:${esc(server.port)}`).join('<span class="sub">、</span>')}</td><td>${group.is_default ? '<span class="status">默认</span>' : '<span class="section-meta">—</span>'}</td><td><button class="row-action" onclick="editUpstream('${esc(group.name)}')">编辑</button> <button class="row-action" onclick="deleteUpstream('${esc(group.name)}')">删除</button></td></tr>`).join('') : '<tr><td colspan="4" class="empty">尚未配置上游组；请添加至少一个组并设置默认回退</td></tr>';
+      document.getElementById('upstreamOptions').innerHTML = upstreamList.map(group => `<option value="${esc(group.name)}"></option>`).join('');
+      const runtime = state.dns_runtime;
+      if (runtime?.endpoint) document.getElementById('dnsEndpointNote').textContent = `本机 DNS 入口 ${runtime.endpoint}（UDP/TCP）；默认上游组需由你配置。`;
+      const logFilter = (document.getElementById('logFilter')?.value || '').trim().toLowerCase();
+      const logs = state.logs.filter(row => row.join(' ').toLowerCase().includes(logFilter));
+      document.getElementById('logTable').innerHTML = logs.length ? logs.map(row => `<tr>${row.map((cell, i) => `<td class="${i === 2 ? 'name' : ''}">${esc(cell)}</td>`).join('')}</tr>`).join('') : '<tr><td colspan="7" class="empty">没有匹配的日志</td></tr>';
+      const eventsMarkup = state.events.map(e => `<li>${esc(e.text)}<span class="event-time">${esc(e.time)}</span></li>`).join('');
+      document.getElementById('auditEvents').innerHTML = eventsMarkup;
+      document.getElementById('pendingCount').textContent = state.pending.length;
+      document.getElementById('zoneCount').textContent = 82;
+    }
+    function syncActionFields() {
+      const forwarding = document.getElementById('pAction').value === 'forward';
+      document.getElementById('targetLabel').textContent = forwarding ? '上游组名称' : 'A 记录返回地址（IPv4）';
+      document.getElementById('pTarget').placeholder = forwarding ? 'campus-upstream' : '10.20.8.15';
+      if (forwarding) document.getElementById('pTarget').setAttribute('list', 'upstreamOptions');
+      else document.getElementById('pTarget').removeAttribute('list');
+    }
+    function openPolicyModal() { document.getElementById('formError').textContent = ''; document.getElementById('pAction').value = 'answer'; syncActionFields(); document.getElementById('policyModal').showModal(); }
+    function closePolicyModal() { document.getElementById('policyModal').close(); }
+    function openUpstreamModal(name = '') {
+      const form = document.getElementById('upstreamForm');
+      form.reset();
+      document.getElementById('upstreamError').textContent = '';
+      const group = state.upstreams.find(item => item.name === name);
+      document.getElementById('upstreamModalTitle').textContent = group ? '编辑上游组' : '新建上游组';
+      document.getElementById('uName').readOnly = Boolean(group);
+      if (group) {
+        document.getElementById('uName').value = group.name;
+        document.getElementById('uServers').value = group.servers.map(server => `${server.address}:${server.port}`).join('\n');
+        document.getElementById('uDefault').checked = group.is_default;
+      }
+      document.getElementById('upstreamModal').showModal();
+    }
+    function editUpstream(name) { openUpstreamModal(name); }
+    function closeUpstreamModal() { document.getElementById('upstreamModal').close(); }
+    function applyServerState(serverState) {
+      state.policies = serverState.policies;
+      state.upstreams = serverState.upstreams || [];
+      state.logs = serverState.logs || [];
+      state.events = serverState.events;
+      window.apiConnected = true;
+      state.pending = state.policies.filter(policy => policy.status === '待发布').map(policy => ({
+        name: policy.name, domain: policy.domain, network: policy.network, line: policy.line, action_type:policy.action_type, priority:policy.priority,
+        target: policy.target, ttl: policy.ttl_seconds
+      }));
+      const dns = serverState.dns_runtime;
+      document.getElementById('runtimeStatus').textContent = dns?.running ? `本机 API 在线 · DNS ${dns.endpoint}` : '本机 API 在线 · DNS 未监听';
+      render();
+    }
+    async function loadServerState() {
+      try {
+        const response = await fetch('/api/state', {cache:'no-store'});
+        if (!response.ok) throw new Error('本机 API 不可用');
+        applyServerState(await response.json());
+      } catch (_) {
+        document.getElementById('runtimeStatus').textContent = '本地静态演示 · API 未启动';
+      }
+    }
+    async function policyAction(id, action) {
+      if (!window.apiConnected) { toast('请启动本机 API 后管理策略'); return; }
+      if (action === 'delete' && !window.confirm('删除该策略？')) return;
+      try {
+        const response = await fetch(`/api/policies/${id}/${action}`, {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || '策略操作失败');
+        applyServerState(result.state);
+        toast(action === 'delete' ? '策略已删除' : action === 'enable' ? '策略已在本机 DNS 启用' : '策略已停用');
+      } catch (error) { toast(error.message); }
+    }
+    async function deleteUpstream(name) {
+      if (!window.apiConnected) { toast('请启动本机 API 后管理上游组'); return; }
+      if (!window.confirm(`删除上游组 ${name}？`)) return;
+      try {
+        const response = await fetch(`/api/upstreams/${encodeURIComponent(name)}/delete`, {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || '上游组删除失败');
+        applyServerState(result.state);
+        toast('上游组已删除');
+      } catch (error) { toast(error.message); }
+    }
+    async function openPreview() {
+      const preview = document.getElementById('previewModal');
+      if (window.apiConnected) {
+        try {
+          const response = await fetch('/api/preview', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.error || '配置预览失败');
+          const stateResponse = await fetch('/api/state', {cache:'no-store'});
+          applyServerState(await stateResponse.json());
+          document.getElementById('previewCount').textContent = `${result.pending_count} 条`;
+          document.getElementById('previewStatus').textContent = result.passed ? '策略编译通过 · 引擎语法未验证' : '校验失败';
+          document.getElementById('previewStatus').style.color = result.engine_preview.runnable ? 'var(--green)' : '#94731c';
+          window.previewViews = {json:JSON.stringify(result.artifact, null, 2), dnsdist:result.engine_preview.config, lab:result.dnsdist_lab_preview.config};
+          const warnings = [...result.dnsdist_lab_preview.warnings];
+          document.getElementById('previewWarnings').innerHTML = warnings.map(warning => `<div>• ${esc(warning)}</div>`).join('');
+          switchPreview('json');
+          preview.showModal();
+          return;
+        } catch (error) { toast(error.message); return; }
+      }
+      document.getElementById('previewCount').textContent = `${state.pending.length} 条`;
+      document.getElementById('previewStatus').textContent = '仅 JSON · 编译器未运行';
+      document.getElementById('previewStatus').style.color = '#94731c';
+      const previewPolicies = [...state.policies, ...state.pending.map(p => ({...p, status:'待发布'}))].map((p, index) => ({
+        id:p.id || `local-${index + 1}`, name:p.name,
+        match:{domain:p.domain, domain_mode:p.domain.startsWith('*.') ? 'suffix' : 'exact', client_cidr:p.network || p.match},
+        decision:p.action_type === 'forward' ? {type:'forward_group',group:p.target} : {type:'return_a',address:p.target},
+        egress_line:p.line, priority:Number(p.priority || 100), ttl_seconds:Number(p.ttl_seconds || String(p.ttl).replace('s','')), status:p.status
+      }));
+      window.previewViews = {json:JSON.stringify({schema_version:'dns-policy/v1',generated_at:new Date().toISOString(),policies:previewPolicies}, null, 2), dnsdist:'启动本机 API 后，才能生成 dnsdist 规则片段。', lab:'启动本机 API 后，才能生成本机 PoC 完整配置。'};
+      document.getElementById('previewWarnings').textContent = '静态演示没有运行策略编译器；请用 run.ps1 启动本机 API 后查看 dnsdist 预览。';
+      switchPreview('json');
+      preview.showModal();
+      state.events.unshift({ text: '打开配置预览并执行结构校验', time: `本地会话 · ${new Date().toLocaleTimeString('zh-CN', {hour12:false})} · 管理员` });
+      render();
+    }
+    function switchPreview(kind) {
+      if (!window.previewViews) return;
+      document.querySelectorAll('[data-preview-kind]').forEach(button => button.classList.toggle('active', button.dataset.previewKind === kind));
+      document.getElementById('previewCode').textContent = window.previewViews[kind] || '';
+    }
+    function downloadLabConfig() {
+      const config = window.previewViews?.lab;
+      if (!window.apiConnected || !config || config.startsWith('启动本机 API')) { toast('请先运行本机 API 并打开配置预览'); return; }
+      const url = URL.createObjectURL(new Blob([config], {type:'text/plain;charset=utf-8'}));
+      const link = document.createElement('a'); link.href = url; link.download = 'dnsdist-local-poc.conf'; link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+    }
+    async function simulatePublish() {
+      if (window.apiConnected) {
+        try {
+          const response = await fetch('/api/simulate-publish', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.error || '模拟发布失败');
+          applyServerState(result.state);
+          document.getElementById('previewModal').close();
+          toast(`模拟发布完成；${result.published_count} 条策略未下发到 DNS 节点`);
+          return;
+        } catch (error) { toast(error.message); return; }
+      }
+      if (state.pending.length) {
+        state.policies.unshift(...state.pending.map(p => ({name:p.name, match:p.network, domain:p.domain, line:p.line, action_type:p.action_type, target:p.target, ttl:`${p.ttl}s`, status:'模拟发布'})));
+        state.pending = [];
+      }
+      state.events.unshift({ text: '执行了一次模拟发布（未连接 DNS 节点）', time: `本地会话 · ${new Date().toLocaleTimeString('zh-CN', {hour12:false})} · 管理员` });
+      document.getElementById('previewModal').close();
+      render();
+      toast('模拟发布完成；没有配置被下发到 DNS 节点');
+    }
+    function toast(message) {
+      const el = document.getElementById('toast'); el.textContent = message; el.classList.add('show');
+      clearTimeout(window.toastTimer); window.toastTimer = setTimeout(() => el.classList.remove('show'), 2700);
+    }
+    document.getElementById('pAction').addEventListener('change', event => {
+      syncActionFields();
+    });
+    document.getElementById('upstreamForm').addEventListener('submit', async event => {
+      event.preventDefault();
+      const form = new FormData(event.currentTarget), error = document.getElementById('upstreamError');
+      if (!window.apiConnected) { error.textContent = '请使用 run.ps1 启动本机 API 后保存上游组。'; return; }
+      const servers = String(form.get('servers')).split(/[\s,;]+/).filter(Boolean);
+      try {
+        const response = await fetch('/api/upstreams', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name:String(form.get('name')).trim(),servers,is_default:document.getElementById('uDefault').checked})});
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || '上游组保存失败');
+        applyServerState(result.state);
+        closeUpstreamModal();
+        toast('上游组已保存');
+      } catch (saveError) { error.textContent = saveError.message; }
+    });
+    document.getElementById('policyForm').addEventListener('submit', async event => {
+      event.preventDefault();
+      const form = new FormData(event.currentTarget);
+      const name = String(form.get('name')).trim(), domain = String(form.get('domain')).trim().toLowerCase();
+      const network = String(form.get('network')).trim(), target = String(form.get('target')).trim();
+      const action_type = String(form.get('action_type'));
+      const ttl = Number(form.get('ttl')), priority = Number(form.get('priority'));
+      const error = document.getElementById('formError');
+      const isIPv4 = value => value.split('.').length === 4 && value.split('.').every(part => /^\d{1,3}$/.test(part) && Number(part) >= 0 && Number(part) <= 255);
+      let asciiDomain = '';
+      try { asciiDomain = new URL(`http://${domain.replace(/^\*\./, '')}`).hostname.toLowerCase(); }
+      catch (_) { error.textContent = '域名格式不正确，请填写完整域名或通配后缀。'; return; }
+      if (!/^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(asciiDomain)) { error.textContent = '域名格式不正确，请填写完整域名或通配后缀。'; return; }
+      const [networkAddress, prefix] = network.split('/');
+      if (!isIPv4(networkAddress) || !/^\d{1,2}$/.test(prefix || '') || Number(prefix) > 32) { error.textContent = '网段请使用有效的 IPv4 CIDR 格式，例如 10.20.0.0/16。'; return; }
+      if (action_type === 'answer' && !isIPv4(target)) { error.textContent = 'A 记录返回地址请填写有效的 IPv4 地址。'; return; }
+      if (action_type === 'forward' && !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(target)) { error.textContent = '上游组名称只能包含字母、数字、点、下划线和连字符。'; return; }
+      if (!Number.isInteger(priority) || priority < 0 || priority > 10000) { error.textContent = '优先级必须为 0 至 10000 的整数。'; return; }
+      if (!Number.isInteger(ttl) || ttl < 1 || ttl > 86400) { error.textContent = 'TTL 必须为 1 至 86400 秒的整数。'; return; }
+      if (window.apiConnected) {
+        try {
+          const response = await fetch('/api/policies', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name,domain,network,line:String(form.get('line')),action_type,target,priority,ttl})});
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.error || '策略保存失败');
+          applyServerState(result.state);
+        } catch (saveError) { error.textContent = saveError.message; return; }
+      } else {
+        state.pending.push({name, domain, network, line:String(form.get('line')), action_type, target, priority, ttl});
+        state.events.unshift({ text: `新增策略草稿「${name}」`, time: `本地会话 · ${new Date().toLocaleTimeString('zh-CN', {hour12:false})} · 管理员` });
+      }
+      closePolicyModal(); event.currentTarget.reset(); syncActionFields(); render(); toast(window.apiConnected ? '草稿已保存到本地数据库' : '草稿已保存到当前页面会话');
+    });
+    document.querySelectorAll('.nav button').forEach(button => button.addEventListener('click', () => navigate(button.dataset.page)));
+    document.getElementById('policyFilter').addEventListener('input', render);
+    document.getElementById('logFilter').addEventListener('input', render);
+    document.getElementById('clock').textContent = new Date().toLocaleString('zh-CN', {hour12:false});
+    render();
+    window.apiConnected = false;
+    loadServerState().then(() => { window.apiConnected = document.getElementById('runtimeStatus').textContent.includes('API 在线'); });
+  </script>
+</body>
+</html>
