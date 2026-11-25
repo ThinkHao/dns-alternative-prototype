@@ -124,7 +124,7 @@ python verify_mvp.py
 
 dnsdist/PowerDNS Recursor 引擎隔离验证由 `verify_dnsdist.py --recursor pdns_recursor` 执行。GitHub Actions 的 `platform-ci.yml` 在 Windows/macOS/Linux 的 Python 3.11 和 3.13 矩阵运行端到端检查，并构建 Compose 镜像、验证 dnsdist/Recursor 实际查询及后端故障恢复。
 
-发布时更新 `VERSION`，提交后创建同名 tag（例如 `v0.4.1`）。`release.yml` 检查 tag 与 `VERSION` 一致，构建并推送 `linux/amd64`、`linux/arm64` 镜像到 GHCR，再创建 GitHub Release。首次发布后需在 GitHub Packages 将镜像包设为 Public，才能让未登录部署主机匿名拉取；公开仓库本身不会自动让容器包公开。
+当前正式版为 [v0.4.0](https://github.com/ThinkHao/dns-alternative-prototype/releases/tag/v0.4.0)，GHCR 镜像 `ghcr.io/thinkhao/dns-alternative-prototype:v0.4.0` 已验证可匿名读取 amd64/arm64 镜像清单。发布时更新 `VERSION`，提交后创建同名 tag（例如 `v0.4.1`）；`release.yml` 检查 tag 与 `VERSION` 一致，构建并推送 `linux/amd64`、`linux/arm64` 镜像到 GHCR，再创建 GitHub Release。GHCR 的公开容器包允许匿名拉取；若在包设置中改为私有，部署主机需先登录 GHCR。[GitHub Packages 权限与公开镜像说明](https://docs.github.com/en/packages/learn-github-packages/about-permissions-for-github-packages)
 
 ## 产品参考
 
