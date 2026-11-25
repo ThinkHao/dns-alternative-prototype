@@ -19,6 +19,7 @@ from dnsdist_compiler import compile_fragment, compile_lab_config
 
 
 APP_DIR = Path(__file__).resolve().parent
+VERSION = os.environ.get("DNS_ALT_VERSION", (APP_DIR / "VERSION").read_text(encoding="utf-8").strip())
 DEFAULT_DB_PATH = APP_DIR.parent.parent / "work" / "dns-alternative-prototype.sqlite3"
 DB_PATH = Path(os.environ.get("DNS_ALT_DB_PATH", str(DEFAULT_DB_PATH))).expanduser().resolve()
 PORT = int(os.environ.get("DNS_ALT_API_PORT", "8765"))
@@ -109,28 +110,120 @@ def init_db() -> None:
             db.execute("UPDATE policies SET action_type='forward', target=substr(target, 5) WHERE target LIKE '上游组 %'")
         if db.execute("SELECT COUNT(*) FROM upstream_groups").fetchone()[0] == 0:
             db.execute("UPDATE policies SET status='待复核' WHERE action_type='forward' AND status='启用'")
-        if db.execute("SELECT COUNT(*) FROM policies").fetchone()[0] == 0:
-            stamp = now_text()
-            seeds = [
-                ("校园网默认递归", "*.external", "10.0.0.0/8", "教育网", 100, "forward", "campus-upstream", 300, "待复核", stamp),
-                ("教学平台优选线路", "learn.example.edu.cn", "10.20.0.0/16", "中国联通", 200, "answer", "10.20.8.15", 60, "启用", stamp),
-                ("图书馆内网访问", "library.example.edu.cn", "10.30.0.0/16", "内网", 150, "answer", "172.22.4.10", 120, "启用", stamp),
-                ("访客网络备用解析", "*.external", "172.18.0.0/16", "中国移动", 100, "forward", "guest-upstream", 180, "待复核", stamp),
-            ]
-            db.executemany(
-                "INSERT INTO policies(name,domain,network,line,priority,action_type,target,ttl,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
-                seeds,
-            )
-            db.executemany(
+        stamp = now_text()
+        migrated = db.execute(
+            "UPDATE policies SET status='待复核' WHERE status='启用' AND "
+            "((name='教学平台优选线路' AND target='10.20.8.15') OR "
+            "(name='图书馆内网访问' AND target='172.22.4.10'))"
+        ).rowcount
+        legacy_pending = db.execute("UPDATE policies SET status='待发布' WHERE status='模拟发布'").rowcount
+        if migrated or legacy_pending:
+            db.execute(
                 "INSERT INTO events(message,actor,created_at) VALUES(?,?,?)",
-                [
-                    ("样例集群完成状态同步", "系统", stamp),
-                    ("策略「校园网默认递归」校验通过", "管理员", stamp),
-                    ("auth-02 区域数据同步完成", "系统", stamp),
-                ],
+                (f"升级兼容：{migrated} 条示例固定 A 策略转为待复核，{legacy_pending} 条旧模拟发布策略转为待发布", "系统", stamp),
             )
         db.execute("CREATE UNIQUE INDEX IF NOT EXISTS one_default_upstream ON upstream_groups(is_default) WHERE is_default=1")
         db.execute("CREATE INDEX IF NOT EXISTS query_logs_created_at ON query_logs(id DESC)")
+
+
+def capture_config(db: sqlite3.Connection) -> dict:
+    policies = [dict(row) for row in db.execute("SELECT * FROM policies ORDER BY id")]
+    upstreams = []
+    for row in db.execute("SELECT * FROM upstream_groups ORDER BY name"):
+        upstreams.append({
+            "name": row["name"],
+            "servers": json.loads(row["servers_json"]),
+            "is_default": bool(row["is_default"]),
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        })
+    return {"schema_version": "dns-local-config/v1", "policies": policies, "upstream_groups": upstreams}
+
+
+def save_revision(db: sqlite3.Connection, kind: str, stamp: str) -> None:
+    db.execute(
+        "INSERT INTO revisions(config_json,created_at,kind) VALUES(?,?,?)",
+        (json.dumps(capture_config(db), ensure_ascii=False), stamp, kind),
+    )
+
+
+def normalize_config(payload: dict) -> dict:
+    if not isinstance(payload, dict):
+        raise ValueError("配置内容必须是 JSON 对象。")
+    if payload.get("schema_version") != "dns-local-config/v1":
+        raise ValueError("配置版本不受支持；需要 dns-local-config/v1。")
+    raw_policies = payload.get("policies")
+    raw_upstreams = payload.get("upstream_groups")
+    if not isinstance(raw_policies, list) or len(raw_policies) > 5000:
+        raise ValueError("策略清单格式不正确或超过 5000 条。")
+    if not isinstance(raw_upstreams, list) or len(raw_upstreams) > 256:
+        raise ValueError("上游组清单格式不正确或超过 256 组。")
+    policies = []
+    policy_names = set()
+    policy_ids = set()
+    allowed_statuses = {"待发布", "启用", "停用", "待复核"}
+    for item in raw_policies:
+        if not isinstance(item, dict):
+            raise ValueError("策略配置项必须是 JSON 对象。")
+        policy = normalize_policy(item)
+        if policy["name"] in policy_names:
+            raise ValueError("配置中存在重复的策略名称。")
+        policy_names.add(policy["name"])
+        status = str(item.get("status", "待发布"))
+        if status not in allowed_statuses:
+            raise ValueError(f"策略「{policy['name']}」的状态不受支持。")
+        raw_id = item.get("id")
+        if raw_id is not None:
+            if isinstance(raw_id, bool):
+                raise ValueError("策略 ID 必须是正整数。")
+            try:
+                policy_id = int(raw_id)
+            except (TypeError, ValueError):
+                raise ValueError("策略 ID 必须是正整数。")
+            if policy_id < 1 or policy_id in policy_ids:
+                raise ValueError("策略 ID 必须是唯一正整数。")
+            policy_ids.add(policy_id)
+        else:
+            policy_id = None
+        policies.append({**policy, "id": policy_id, "status": status, "created_at": str(item.get("created_at") or now_text())[:64]})
+    upstreams = []
+    upstream_names = set()
+    defaults = 0
+    for item in raw_upstreams:
+        if not isinstance(item, dict):
+            raise ValueError("上游组配置项必须是 JSON 对象。")
+        upstream = normalize_upstream(item)
+        if upstream["name"] in upstream_names:
+            raise ValueError("配置中存在重复的上游组名称。")
+        upstream_names.add(upstream["name"])
+        defaults += int(upstream["is_default"])
+        upstreams.append({
+            **upstream,
+            "created_at": str(item.get("created_at") or now_text())[:64],
+            "updated_at": str(item.get("updated_at") or now_text())[:64],
+        })
+    if defaults > 1:
+        raise ValueError("只能有一个默认上游组。")
+    for policy in policies:
+        if policy["action_type"] == "forward" and policy["target"] not in upstream_names:
+            raise ValueError(f"策略「{policy['name']}」引用的上游组不存在。")
+    return {"schema_version": "dns-local-config/v1", "policies": policies, "upstream_groups": upstreams}
+
+
+def restore_config(db: sqlite3.Connection, config: dict) -> None:
+    db.execute("DELETE FROM policies")
+    db.execute("DELETE FROM upstream_groups")
+    for group in config["upstream_groups"]:
+        db.execute(
+            "INSERT INTO upstream_groups(name,servers_json,is_default,created_at,updated_at) VALUES(?,?,?,?,?)",
+            (group["name"], json.dumps(group["servers"]), int(group["is_default"]), group["created_at"], group["updated_at"]),
+        )
+    for policy in config["policies"]:
+        values = (policy["name"], policy["domain"], policy["network"], policy["line"], policy["priority"], policy["action_type"], policy["target"], policy["ttl"], policy["status"], policy["created_at"])
+        if policy["id"] is None:
+            db.execute("INSERT INTO policies(name,domain,network,line,priority,action_type,target,ttl,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)", values)
+        else:
+            db.execute("INSERT INTO policies(id,name,domain,network,line,priority,action_type,target,ttl,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)", (policy["id"], *values))
 
 
 def policy_dict(row: sqlite3.Row) -> dict:
@@ -159,6 +252,16 @@ def read_state() -> dict:
             for row in db.execute("SELECT * FROM events ORDER BY id DESC LIMIT 50")
         ]
         revision = db.execute("SELECT COUNT(*) FROM revisions").fetchone()[0]
+        revisions = []
+        for row in db.execute("SELECT id,kind,created_at,config_json FROM revisions ORDER BY id DESC"):
+            try:
+                supported = json.loads(row["config_json"]).get("schema_version") == "dns-local-config/v1"
+            except (json.JSONDecodeError, AttributeError):
+                supported = False
+            if supported:
+                revisions.append({"id": row["id"], "kind": row["kind"], "created_at": row["created_at"]})
+                if len(revisions) == 20:
+                    break
         upstreams = [
             {"name": row["name"], "servers": json.loads(row["servers_json"]), "is_default": bool(row["is_default"])}
             for row in db.execute("SELECT * FROM upstream_groups ORDER BY is_default DESC, name")
@@ -168,7 +271,7 @@ def read_state() -> dict:
             for row in db.execute("SELECT * FROM query_logs ORDER BY id DESC LIMIT 200")
         ]
     dns_runtime = RUNTIME.info() if RUNTIME else {"running": False, "host": DNS_HOST, "port": DNS_PORT, "endpoint": f"{DNS_HOST}:{DNS_PORT}", "transports": [], "query_count": 0}
-    return {"policies": policies, "upstreams": upstreams, "logs": logs, "events": events, "revision": revision, "mode": "local-mvp", "dns_runtime": dns_runtime}
+    return {"policies": policies, "upstreams": upstreams, "logs": logs, "events": events, "revision": revision, "revisions": revisions, "version": VERSION, "mode": "local-mvp", "dns_runtime": dns_runtime}
 
 
 def normalize_upstream(payload: dict) -> dict:
@@ -203,7 +306,10 @@ def normalize_upstream(payload: dict) -> dict:
         server = {"address": host, "port": port}
         if server not in servers:
             servers.append(server)
-    return {"name": name, "servers": servers, "is_default": bool(payload.get("is_default", False))}
+    is_default = payload.get("is_default", False)
+    if not isinstance(is_default, bool):
+        raise ValueError("默认上游标记必须是布尔值。")
+    return {"name": name, "servers": servers, "is_default": is_default}
 
 
 def normalize_policy(payload: dict) -> dict:
@@ -311,10 +417,10 @@ class Handler(SimpleHTTPRequestHandler):
             return False
         return hostname in {"127.0.0.1", "localhost", "::1"}
 
-    def read_json(self) -> dict:
+    def read_json(self, max_bytes: int = 16_384) -> dict:
         length = int(self.headers.get("Content-Length", "0"))
-        if length < 1 or length > 16_384:
-            raise ValueError("请求内容为空或超过 16 KB。")
+        if length < 1 or length > max_bytes:
+            raise ValueError(f"请求内容为空或超过 {max_bytes // 1024} KB。")
         try:
             body = json.loads(self.rfile.read(length).decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError):
@@ -329,9 +435,14 @@ class Handler(SimpleHTTPRequestHandler):
         path = urlsplit(self.path).path
         if path == "/api/state":
             return self.send_json(200, read_state())
+        if path == "/api/config/export":
+            with connect() as db:
+                config = capture_config(db)
+            return self.send_json(200, {**config, "exported_at": now_text(), "application_version": VERSION})
         if path == "/api/health":
             runtime = RUNTIME.info() if RUNTIME else {"running": False, "endpoint": f"{DNS_HOST}:{DNS_PORT}"}
-            return self.send_json(200, {"ok": True, "mode": "local-mvp", "dns_runtime": runtime, "dnsdist_connected": False, "production_nodes_connected": False})
+            ok = bool(RUNTIME and runtime.get("running"))
+            return self.send_json(200 if ok else 503, {"ok": ok, "version": VERSION, "mode": "local-mvp", "dns_runtime": runtime, "dnsdist_connected": False, "production_nodes_connected": False})
         return super().do_GET()
 
     def do_POST(self):
@@ -339,15 +450,19 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_json(403, {"error": "仅允许本机访问。"})
         path = urlsplit(self.path).path
         try:
-            payload = self.read_json()
+            payload = self.read_json(max_bytes=1_048_576 if path == "/api/config/import" else 16_384)
             if path == "/api/policies":
                 return self.create_policy(payload)
             if path == "/api/upstreams":
                 return self.save_upstream(payload)
             if path == "/api/preview":
                 return self.preview()
-            if path == "/api/simulate-publish":
-                return self.simulate_publish()
+            if path == "/api/apply":
+                return self.apply_pending()
+            if path == "/api/rollback":
+                return self.rollback(payload)
+            if path == "/api/config/import":
+                return self.import_config(payload)
             match = re.fullmatch(r"/api/policies/(\d+)/(enable|disable|delete)", path)
             if match:
                 return self.policy_action(int(match.group(1)), match.group(2))
@@ -355,6 +470,19 @@ class Handler(SimpleHTTPRequestHandler):
             if match:
                 return self.delete_upstream(match.group(1))
             return self.send_json(404, {"error": "接口不存在。"})
+        except ValueError as exc:
+            return self.send_json(400, {"error": str(exc)})
+        except sqlite3.IntegrityError:
+            return self.send_json(409, {"error": "策略名称已存在。"})
+
+    def do_PUT(self):
+        if not self.host_allowed():
+            return self.send_json(403, {"error": "仅允许本机访问。"})
+        match = re.fullmatch(r"/api/policies/(\d+)", urlsplit(self.path).path)
+        if not match:
+            return self.send_json(404, {"error": "接口不存在。"})
+        try:
+            return self.update_policy(int(match.group(1)), self.read_json())
         except ValueError as exc:
             return self.send_json(400, {"error": str(exc)})
         except sqlite3.IntegrityError:
@@ -369,6 +497,7 @@ class Handler(SimpleHTTPRequestHandler):
                 raise ValueError("该上游组不存在或没有配置 DNS 服务器。")
         stamp = now_text()
         with connect() as db:
+            save_revision(db, "新增策略前", stamp)
             cursor = db.execute(
                 "INSERT INTO policies(name,domain,network,line,priority,action_type,target,ttl,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
                 (policy["name"], policy["domain"], policy["network"], policy["line"], policy["priority"], policy["action_type"], policy["target"], policy["ttl"], "待发布", stamp),
@@ -377,10 +506,30 @@ class Handler(SimpleHTTPRequestHandler):
             db.execute("INSERT INTO events(message,actor,created_at) VALUES(?,?,?)", (f'新增策略草稿「{policy["name"]}」', "管理员", stamp))
         return self.send_json(201, {"policy": {**policy, "id": policy_id, "match": policy["network"], "ttl_seconds": policy["ttl"], "ttl": f'{policy["ttl"]}s', "status": "待发布", "created_at": stamp}, "state": read_state()})
 
+    def update_policy(self, policy_id: int, payload: dict) -> None:
+        policy = normalize_policy(payload)
+        stamp = now_text()
+        with connect() as db:
+            row = db.execute("SELECT status FROM policies WHERE id=?", (policy_id,)).fetchone()
+            if row is None:
+                return self.send_json(404, {"error": "策略不存在。"})
+            if policy["action_type"] == "forward":
+                group = db.execute("SELECT servers_json FROM upstream_groups WHERE name=?", (policy["target"],)).fetchone()
+                if group is None or not json.loads(group["servers_json"]):
+                    raise ValueError("该上游组不存在或没有配置 DNS 服务器。")
+            save_revision(db, f"编辑策略前 #{policy_id}", stamp)
+            db.execute(
+                "UPDATE policies SET name=?,domain=?,network=?,line=?,priority=?,action_type=?,target=?,ttl=? WHERE id=?",
+                (policy["name"], policy["domain"], policy["network"], policy["line"], policy["priority"], policy["action_type"], policy["target"], policy["ttl"], policy_id),
+            )
+            db.execute("INSERT INTO events(message,actor,created_at) VALUES(?,?,?)", (f'编辑策略「{policy["name"]}」', "管理员", stamp))
+        return self.send_json(200, {"state": read_state()})
+
     def save_upstream(self, payload: dict) -> None:
         upstream = normalize_upstream(payload)
         stamp = now_text()
         with connect() as db:
+            save_revision(db, ("更新" if db.execute("SELECT 1 FROM upstream_groups WHERE name=?", (upstream["name"],)).fetchone() else "新增") + "上游组前", stamp)
             if upstream["is_default"]:
                 db.execute("UPDATE upstream_groups SET is_default=0")
             existing = db.execute("SELECT 1 FROM upstream_groups WHERE name=?", (upstream["name"],)).fetchone()
@@ -404,6 +553,7 @@ class Handler(SimpleHTTPRequestHandler):
             used = db.execute("SELECT COUNT(*) FROM policies WHERE action_type='forward' AND target=?", (name,)).fetchone()[0]
             if used:
                 raise ValueError("该上游组仍被解析策略引用，不能删除。")
+            save_revision(db, f"删除上游组 {name} 前", stamp)
             db.execute("DELETE FROM upstream_groups WHERE name=?", (name,))
             db.execute("INSERT INTO events(message,actor,created_at) VALUES(?,?,?)", (f'删除上游组「{name}」', "管理员", stamp))
         return self.send_json(200, {"state": read_state()})
@@ -417,6 +567,7 @@ class Handler(SimpleHTTPRequestHandler):
             if action == "delete":
                 if row["status"] == "启用":
                     raise ValueError("请先停用策略，再删除。")
+                save_revision(db, f"删除策略 #{policy_id} 前", stamp)
                 db.execute("DELETE FROM policies WHERE id=?", (policy_id,))
                 message = f'删除策略「{row["name"]}」'
             else:
@@ -425,6 +576,9 @@ class Handler(SimpleHTTPRequestHandler):
                     group = db.execute("SELECT servers_json FROM upstream_groups WHERE name=?", (row["target"],)).fetchone()
                     if group is None or not json.loads(group["servers_json"]):
                         raise ValueError("该策略引用的上游组未配置 DNS 服务器。")
+                if row["status"] == status:
+                    return self.send_json(200, {"state": read_state()})
+                save_revision(db, f"{status}策略 #{policy_id} 前", stamp)
                 db.execute("UPDATE policies SET status=? WHERE id=?", (status, policy_id))
                 message = f'将策略「{row["name"]}」设为{status}'
             db.execute("INSERT INTO events(message,actor,created_at) VALUES(?,?,?)", (message, "管理员", stamp))
@@ -439,18 +593,47 @@ class Handler(SimpleHTTPRequestHandler):
         lab_config_preview = compile_lab_config(artifact)
         return self.send_json(200, {"passed": True, "pending_count": len(pending), "policies": pending, "artifact": artifact, "engine_preview": engine_preview, "dnsdist_lab_preview": lab_config_preview, "dnsdist_connected": False, "production_nodes_connected": False})
 
-    def simulate_publish(self) -> None:
+    def apply_pending(self) -> None:
         stamp = now_text()
         with connect() as db:
-            pending = [dict(row) for row in db.execute("SELECT * FROM policies WHERE status='待发布' ORDER BY id")]
+            pending = db.execute("SELECT * FROM policies WHERE status='待发布' ORDER BY id").fetchall()
+            for row in pending:
+                if row["action_type"] == "forward":
+                    group = db.execute("SELECT servers_json FROM upstream_groups WHERE name=?", (row["target"],)).fetchone()
+                    if group is None or not json.loads(group["servers_json"]):
+                        raise ValueError(f"策略「{row['name']}」引用的上游组不可用。")
             if pending:
-                db.execute("UPDATE policies SET status='模拟发布' WHERE status='待发布'")
-            db.execute("INSERT INTO events(message,actor,created_at) VALUES(?,?,?)", (f"模拟发布完成（{len(pending)} 条；未连接 DNS 节点）", "管理员", stamp))
-        if pending:
-            snapshot = build_artifact()
-            with connect() as db:
-                db.execute("INSERT INTO revisions(config_json,created_at,kind) VALUES(?,?,?)", (json.dumps(snapshot, ensure_ascii=False), stamp, "模拟发布"))
-        return self.send_json(200, {"state": read_state(), "published_count": len(pending), "production_nodes_connected": False})
+                save_revision(db, "本地 DNS 应用前", stamp)
+                db.execute("UPDATE policies SET status='启用' WHERE status='待发布'")
+            db.execute("INSERT INTO events(message,actor,created_at) VALUES(?,?,?)", (f"应用 {len(pending)} 条待发布策略到本机 DNS", "管理员", stamp))
+        return self.send_json(200, {"state": read_state(), "applied_count": len(pending), "production_nodes_connected": False})
+
+    def rollback(self, payload: dict) -> None:
+        try:
+            revision_id = int(payload.get("revision_id", 0))
+        except (TypeError, ValueError):
+            raise ValueError("快照 ID 必须是正整数。")
+        if revision_id < 1:
+            raise ValueError("请选择一个可用快照。")
+        stamp = now_text()
+        with connect() as db:
+            revision = db.execute("SELECT config_json FROM revisions WHERE id=?", (revision_id,)).fetchone()
+            if revision is None:
+                return self.send_json(404, {"error": "快照不存在。"})
+            config = normalize_config(json.loads(revision["config_json"]))
+            save_revision(db, f"回滚至快照 #{revision_id} 前", stamp)
+            restore_config(db, config)
+            db.execute("INSERT INTO events(message,actor,created_at) VALUES(?,?,?)", (f"已回滚至配置快照 #{revision_id}", "管理员", stamp))
+        return self.send_json(200, {"state": read_state(), "restored_revision": revision_id})
+
+    def import_config(self, payload: dict) -> None:
+        config = normalize_config(payload.get("config", payload))
+        stamp = now_text()
+        with connect() as db:
+            save_revision(db, "导入配置前", stamp)
+            restore_config(db, config)
+            db.execute("INSERT INTO events(message,actor,created_at) VALUES(?,?,?)", (f"导入配置：{len(config['policies'])} 条策略、{len(config['upstream_groups'])} 个上游组", "管理员", stamp))
+        return self.send_json(200, {"state": read_state(), "imported_policies": len(config["policies"]), "imported_upstreams": len(config["upstream_groups"])})
 
 
 def main() -> None:

@@ -194,7 +194,7 @@
         <div class="metrics">
           <div class="metric"><div class="metric-label">样例解析速率</div><div class="metric-value">183,420 <small style="font-size:11px;font-weight:550">QPS</small></div><div class="metric-foot">样例数据 · 最近 1 分钟</div></div>
           <div class="metric"><div class="metric-label">在线解析节点</div><div class="metric-value">6 <small style="font-size:12px;font-weight:550;color:#8591a0">/ 6</small></div><div class="metric-foot good">所有示例节点健康</div></div>
-          <div class="metric"><div class="metric-label">权威区域</div><div class="metric-value" id="zoneCount">82</div><div class="metric-foot">样例数据 · 主从同步正常</div></div>
+          <div class="metric"><div class="metric-label">权威区域</div><div class="metric-value" id="zoneCount">—</div><div class="metric-foot">当前版本未实现权威托管</div></div>
           <div class="metric"><div class="metric-label">待审核策略</div><div class="metric-value" id="pendingCount">0</div><div class="metric-foot">启用后作用于本机 DNS</div></div>
         </div>
         <div class="overview-grid">
@@ -229,9 +229,9 @@
       </section>
 
       <section class="page hidden" data-view="policies">
-        <div class="page-head"><div><h1>解析策略</h1><p class="lead">按客户端网段与域名匹配，返回固定记录或转发到上游组</p></div><div class="head-right"><button class="btn" onclick="openPreview()">预览并校验</button><button class="btn btn-primary" onclick="openPolicyModal()">＋ 新建策略</button></div></div>
+        <div class="page-head"><div><h1>解析策略</h1><p class="lead">按客户端网段与域名匹配，返回固定记录或转发到上游组</p></div><div class="head-right"><button class="btn" onclick="exportConfig()">导出备份</button><button class="btn" onclick="document.getElementById('configFile').click()">导入备份</button><input id="configFile" type="file" accept="application/json,.json" hidden onchange="importConfig(this)"><button class="btn" id="rollbackButton" onclick="rollbackConfig()">回滚最近快照</button><button class="btn" onclick="openPreview()">预览并校验</button><button class="btn btn-primary" onclick="openPolicyModal()">＋ 新建策略</button></div></div>
         <div class="section"><div class="section-head"><h2>策略列表 <span class="section-meta" id="policyTotal"></span></h2><div class="toolbar"><input class="filter" id="policyFilter" placeholder="搜索策略、域名或网段" aria-label="搜索解析策略"></div></div><div class="section-body table-wrap content-table"><table><thead><tr><th>策略名称</th><th>匹配条件</th><th>线路 / 目标</th><th>优先级</th><th>TTL</th><th>状态</th><th></th></tr></thead><tbody id="policyTable"></tbody></table></div></div>
-        <div class="demo-strip"><strong>运行范围</strong><span>启用/停用会立即影响本机 DNS 查询；不会下发到其他节点。</span></div>
+        <div class="demo-strip"><strong>运行范围</strong><span>启用/停用和编辑会立即影响本机 DNS 查询；待发布策略需先通过预览，再应用到本机。所有变更会留存回滚快照，不会下发到其他节点。</span></div>
       </section>
 
       <section class="page hidden" data-view="zones">
@@ -272,8 +272,9 @@
 
   <dialog id="policyModal">
     <form id="policyForm">
-      <div class="modal-head"><div><h3>新建解析策略</h3><p>定义匹配条件与返回线路，保存为本地草稿</p></div><button class="close" type="button" onclick="closePolicyModal()" aria-label="关闭">×</button></div>
+      <div class="modal-head"><div><h3 id="policyModalTitle">新建解析策略</h3><p>启用策略的编辑会立即影响本机 DNS，并自动保存回滚快照</p></div><button class="close" type="button" onclick="closePolicyModal()" aria-label="关闭">×</button></div>
       <div class="modal-body">
+        <input id="pId" type="hidden">
         <div class="form-grid">
           <div class="field full"><label for="pName">策略名称</label><input id="pName" name="name" required maxlength="48" placeholder="例如：教学平台移动出口"></div>
           <div class="field"><label for="pDomain">域名后缀</label><input id="pDomain" name="domain" required placeholder="learn.example.edu.cn"></div>
@@ -286,7 +287,7 @@
           <div class="field"><label for="pTtl">TTL（秒）</label><input id="pTtl" name="ttl" type="number" min="1" max="86400" value="60" required></div>
         </div>
         <div class="form-error" id="formError" role="alert"></div>
-        <div class="modal-foot"><button class="btn" type="button" onclick="closePolicyModal()">取消</button><button class="btn btn-primary" type="submit">保存草稿</button></div>
+        <div class="modal-foot"><button class="btn" type="button" onclick="closePolicyModal()">取消</button><button class="btn btn-primary" id="policySubmit" type="submit">保存草稿</button></div>
       </div>
     </form>
   </dialog>
@@ -307,13 +308,13 @@
   </dialog>
 
   <dialog id="previewModal">
-    <div class="modal-head"><div><h3>配置预览与校验</h3><p>策略启停作用于本机 DNS；不会发布到外部解析节点</p></div><button class="close" onclick="document.getElementById('previewModal').close()" aria-label="关闭">×</button></div>
+    <div class="modal-head"><div><h3>配置预览与校验</h3><p>策略应用到本机 DNS；不会下发到其他节点</p></div><button class="close" onclick="document.getElementById('previewModal').close()" aria-label="关闭">×</button></div>
     <div class="modal-body">
-      <div class="preview-box"><div class="preview-line"><span>配置来源</span><strong>本机期望配置</strong></div><div class="preview-line"><span>待发布策略</span><strong id="previewCount">0 条</strong></div><div class="preview-line"><span>校验状态</span><strong id="previewStatus" style="color:var(--green)">结构校验通过</strong></div><div class="preview-line"><span>生产发布</span><strong>未配置</strong></div></div>
+      <div class="preview-box"><div class="preview-line"><span>配置来源</span><strong>本机期望配置</strong></div><div class="preview-line"><span>待发布策略</span><strong id="previewCount">0 条</strong></div><div class="preview-line"><span>校验状态</span><strong id="previewStatus" style="color:var(--green)">结构校验通过</strong></div><div class="preview-line"><span>生效范围</span><strong>本机 DNS 服务</strong></div></div>
       <div class="preview-tabs"><button type="button" class="active" data-preview-kind="json" onclick="switchPreview('json')">期望配置 JSON</button><button type="button" data-preview-kind="dnsdist" onclick="switchPreview('dnsdist')">规则片段</button><button type="button" data-preview-kind="lab" onclick="switchPreview('lab')">本机 PoC 完整配置</button></div>
       <div class="preview-warnings" id="previewWarnings"></div>
       <pre class="code-preview" id="previewCode"></pre>
-      <div class="modal-foot"><button class="btn" onclick="document.getElementById('previewModal').close()">关闭</button><button class="btn" type="button" onclick="downloadLabConfig()">下载本机 PoC 配置</button><button class="btn btn-primary" onclick="simulatePublish()">模拟发布</button></div>
+      <div class="modal-foot"><button class="btn" onclick="document.getElementById('previewModal').close()">关闭</button><button class="btn" type="button" onclick="downloadLabConfig()">下载本机 PoC 配置</button><button class="btn btn-primary" onclick="applyPending()">应用待发布策略</button></div>
     </div>
   </dialog>
   <div class="toast" id="toast" role="status"></div>
@@ -321,6 +322,7 @@
   <script>
     const state = {
       pending: [],
+      revisions: [],
       events: [
         { text: '样例集群完成状态同步', time: '今天 10:42:16 · 系统' },
         { text: '策略「校园网默认递归」校验通过', time: '今天 10:38:04 · 管理员' },
@@ -368,7 +370,7 @@
       const policyFilter = (document.getElementById('policyFilter')?.value || '').trim().toLowerCase();
       const filtered = state.policies.filter(p => Object.values(p).join(' ').toLowerCase().includes(policyFilter));
       document.getElementById('policyTotal').textContent = `· ${filtered.length} 条`;
-      document.getElementById('policyTable').innerHTML = filtered.length ? filtered.map(p => `<tr><td class="name">${esc(p.name)}</td><td>${esc(p.domain)}<span class="sub">${esc(p.match)}</span></td><td>${esc(p.line)}<span class="sub">${esc(targetLabel(p))}</span></td><td>${esc(p.priority ?? 100)}</td><td>${esc(p.ttl)}</td><td><span class="status ${p.status === '启用' ? '' : 'warn'}">${esc(p.status)}</span></td><td>${window.apiConnected && p.id ? `<button class="row-action" onclick="policyAction(${p.id}, '${p.status === '启用' ? 'disable' : 'enable'}')">${p.status === '启用' ? '停用' : '启用'}</button> <button class="row-action" onclick="policyAction(${p.id}, 'delete')">删除</button>` : '<span class="section-meta">静态样例</span>'}</td></tr>`).join('') : '<tr><td colspan="7" class="empty">没有匹配的策略</td></tr>';
+      document.getElementById('policyTable').innerHTML = filtered.length ? filtered.map(p => `<tr><td class="name">${esc(p.name)}</td><td>${esc(p.domain)}<span class="sub">${esc(p.match)}</span></td><td>${esc(p.line)}<span class="sub">${esc(targetLabel(p))}</span></td><td>${esc(p.priority ?? 100)}</td><td>${esc(p.ttl)}</td><td><span class="status ${p.status === '启用' ? '' : 'warn'}">${esc(p.status)}</span></td><td>${window.apiConnected && p.id ? `<button class="row-action" onclick="openPolicyModal(${p.id})">编辑</button> <button class="row-action" onclick="policyAction(${p.id}, '${p.status === '启用' ? 'disable' : 'enable'}')">${p.status === '启用' ? '停用' : '启用'}</button> <button class="row-action" onclick="policyAction(${p.id}, 'delete')">删除</button>` : '<span class="section-meta">静态样例</span>'}</td></tr>`).join('') : '<tr><td colspan="7" class="empty">没有匹配的策略</td></tr>';
       const upstreamList = state.upstreams || [];
       document.getElementById('upstreamTotal').textContent = `· ${upstreamList.length} 组`;
       document.getElementById('upstreamTable').innerHTML = upstreamList.length ? upstreamList.map(group => `<tr><td class="name">${esc(group.name)}</td><td>${group.servers.map(server => `${esc(server.address)}:${esc(server.port)}`).join('<span class="sub">、</span>')}</td><td>${group.is_default ? '<span class="status">默认</span>' : '<span class="section-meta">—</span>'}</td><td><button class="row-action" onclick="editUpstream('${esc(group.name)}')">编辑</button> <button class="row-action" onclick="deleteUpstream('${esc(group.name)}')">删除</button></td></tr>`).join('') : '<tr><td colspan="4" class="empty">尚未配置上游组；请添加至少一个组并设置默认回退</td></tr>';
@@ -381,7 +383,9 @@
       const eventsMarkup = state.events.map(e => `<li>${esc(e.text)}<span class="event-time">${esc(e.time)}</span></li>`).join('');
       document.getElementById('auditEvents').innerHTML = eventsMarkup;
       document.getElementById('pendingCount').textContent = state.pending.length;
-      document.getElementById('zoneCount').textContent = 82;
+      document.getElementById('rollbackButton').disabled = !window.apiConnected || !state.revisions.length;
+      document.getElementById('rollbackButton').title = state.revisions.length ? `${state.revisions[0].kind} · ${state.revisions[0].created_at}` : '尚无可回滚快照';
+      document.getElementById('zoneCount').textContent = '—';
     }
     function syncActionFields() {
       const forwarding = document.getElementById('pAction').value === 'forward';
@@ -390,7 +394,27 @@
       if (forwarding) document.getElementById('pTarget').setAttribute('list', 'upstreamOptions');
       else document.getElementById('pTarget').removeAttribute('list');
     }
-    function openPolicyModal() { document.getElementById('formError').textContent = ''; document.getElementById('pAction').value = 'answer'; syncActionFields(); document.getElementById('policyModal').showModal(); }
+    function openPolicyModal(policyId = null) {
+      const form = document.getElementById('policyForm');
+      form.reset();
+      document.getElementById('formError').textContent = '';
+      const policy = state.policies.find(item => item.id === policyId);
+      document.getElementById('pId').value = policy?.id || '';
+      document.getElementById('policyModalTitle').textContent = policy ? '编辑解析策略' : '新建解析策略';
+      document.getElementById('policySubmit').textContent = policy ? '保存修改' : '保存草稿';
+      if (policy) {
+        document.getElementById('pName').value = policy.name;
+        document.getElementById('pDomain').value = policy.domain;
+        document.getElementById('pNetwork').value = policy.network;
+        document.getElementById('pLine').value = policy.line;
+        document.getElementById('pAction').value = policy.action_type;
+        document.getElementById('pTarget').value = policy.target;
+        document.getElementById('pPriority').value = policy.priority;
+        document.getElementById('pTtl').value = policy.ttl_seconds;
+      }
+      syncActionFields();
+      document.getElementById('policyModal').showModal();
+    }
     function closePolicyModal() { document.getElementById('policyModal').close(); }
     function openUpstreamModal(name = '') {
       const form = document.getElementById('upstreamForm');
@@ -412,7 +436,8 @@
       state.policies = serverState.policies;
       state.upstreams = serverState.upstreams || [];
       state.logs = serverState.logs || [];
-      state.events = serverState.events;
+      state.events = serverState.events || [];
+      state.revisions = serverState.revisions || [];
       window.apiConnected = true;
       state.pending = state.policies.filter(policy => policy.status === '待发布').map(policy => ({
         name: policy.name, domain: policy.domain, network: policy.network, line: policy.line, action_type:policy.action_type, priority:policy.priority,
@@ -420,6 +445,7 @@
       }));
       const dns = serverState.dns_runtime;
       document.getElementById('runtimeStatus').textContent = dns?.running ? `本机 API 在线 · DNS ${dns.endpoint}` : '本机 API 在线 · DNS 未监听';
+      document.querySelector('.runtime').textContent = `DNS ${serverState.version || 'dev'} · ${new Date().toLocaleString('zh-CN', {hour12:false})}`;
       render();
     }
     async function loadServerState() {
@@ -451,6 +477,45 @@
         if (!response.ok) throw new Error(result.error || '上游组删除失败');
         applyServerState(result.state);
         toast('上游组已删除');
+      } catch (error) { toast(error.message); }
+    }
+    async function exportConfig() {
+      if (!window.apiConnected) { toast('请启动本机 API 后导出配置'); return; }
+      try {
+        const response = await fetch('/api/config/export', {cache:'no-store'});
+        const config = await response.json();
+        if (!response.ok) throw new Error(config.error || '配置导出失败');
+        const url = URL.createObjectURL(new Blob([JSON.stringify(config, null, 2)], {type:'application/json'}));
+        const link = document.createElement('a'); link.href = url; link.download = `dns-alternative-config-${new Date().toISOString().slice(0,10)}.json`; link.click();
+        setTimeout(() => URL.revokeObjectURL(url), 0);
+        toast('配置备份已下载');
+      } catch (error) { toast(error.message); }
+    }
+    async function importConfig(input) {
+      const file = input.files?.[0];
+      input.value = '';
+      if (!file || !window.apiConnected) return;
+      if (file.size > 1024 * 1024) { toast('备份文件超过 1 MB'); return; }
+      if (!window.confirm('导入会替换当前策略和上游组，并自动创建回滚快照。继续？')) return;
+      try {
+        const config = JSON.parse(await file.text());
+        const response = await fetch('/api/config/import', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({config})});
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || '配置导入失败');
+        applyServerState(result.state);
+        toast(`已导入 ${result.imported_policies} 条策略和 ${result.imported_upstreams} 个上游组`);
+      } catch (error) { toast(error instanceof SyntaxError ? '备份文件不是有效 JSON' : error.message); }
+    }
+    async function rollbackConfig() {
+      if (!window.apiConnected || !state.revisions.length) { toast('没有可回滚的配置快照'); return; }
+      const revision = state.revisions[0];
+      if (!window.confirm(`恢复到快照 #${revision.id}（${revision.kind}，${revision.created_at}）？`)) return;
+      try {
+        const response = await fetch('/api/rollback', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({revision_id:revision.id})});
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || '配置回滚失败');
+        applyServerState(result.state);
+        toast(`已恢复快照 #${result.restored_revision}`);
       } catch (error) { toast(error.message); }
     }
     async function openPreview() {
@@ -501,26 +566,16 @@
       const link = document.createElement('a'); link.href = url; link.download = 'dnsdist-local-poc.conf'; link.click();
       setTimeout(() => URL.revokeObjectURL(url), 0);
     }
-    async function simulatePublish() {
-      if (window.apiConnected) {
-        try {
-          const response = await fetch('/api/simulate-publish', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
-          const result = await response.json();
-          if (!response.ok) throw new Error(result.error || '模拟发布失败');
-          applyServerState(result.state);
-          document.getElementById('previewModal').close();
-          toast(`模拟发布完成；${result.published_count} 条策略未下发到 DNS 节点`);
-          return;
-        } catch (error) { toast(error.message); return; }
-      }
-      if (state.pending.length) {
-        state.policies.unshift(...state.pending.map(p => ({name:p.name, match:p.network, domain:p.domain, line:p.line, action_type:p.action_type, target:p.target, ttl:`${p.ttl}s`, status:'模拟发布'})));
-        state.pending = [];
-      }
-      state.events.unshift({ text: '执行了一次模拟发布（未连接 DNS 节点）', time: `本地会话 · ${new Date().toLocaleTimeString('zh-CN', {hour12:false})} · 管理员` });
-      document.getElementById('previewModal').close();
-      render();
-      toast('模拟发布完成；没有配置被下发到 DNS 节点');
+    async function applyPending() {
+      if (!window.apiConnected) { toast('请启动本机 API 后应用策略'); return; }
+      try {
+        const response = await fetch('/api/apply', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || '策略应用失败');
+        applyServerState(result.state);
+        document.getElementById('previewModal').close();
+        toast(`${result.applied_count} 条待发布策略已应用到本机 DNS`);
+      } catch (error) { toast(error.message); }
     }
     function toast(message) {
       const el = document.getElementById('toast'); el.textContent = message; el.classList.add('show');
@@ -562,9 +617,10 @@
       if (action_type === 'forward' && !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(target)) { error.textContent = '上游组名称只能包含字母、数字、点、下划线和连字符。'; return; }
       if (!Number.isInteger(priority) || priority < 0 || priority > 10000) { error.textContent = '优先级必须为 0 至 10000 的整数。'; return; }
       if (!Number.isInteger(ttl) || ttl < 1 || ttl > 86400) { error.textContent = 'TTL 必须为 1 至 86400 秒的整数。'; return; }
+      const policyId = Number(document.getElementById('pId').value) || null;
       if (window.apiConnected) {
         try {
-          const response = await fetch('/api/policies', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name,domain,network,line:String(form.get('line')),action_type,target,priority,ttl})});
+          const response = await fetch(policyId ? `/api/policies/${policyId}` : '/api/policies', {method:policyId ? 'PUT' : 'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name,domain,network,line:String(form.get('line')),action_type,target,priority,ttl})});
           const result = await response.json();
           if (!response.ok) throw new Error(result.error || '策略保存失败');
           applyServerState(result.state);
@@ -573,7 +629,7 @@
         state.pending.push({name, domain, network, line:String(form.get('line')), action_type, target, priority, ttl});
         state.events.unshift({ text: `新增策略草稿「${name}」`, time: `本地会话 · ${new Date().toLocaleTimeString('zh-CN', {hour12:false})} · 管理员` });
       }
-      closePolicyModal(); event.currentTarget.reset(); syncActionFields(); render(); toast(window.apiConnected ? '草稿已保存到本地数据库' : '草稿已保存到当前页面会话');
+      closePolicyModal(); event.currentTarget.reset(); syncActionFields(); render(); toast(window.apiConnected ? (policyId ? '策略修改已保存' : '草稿已保存到本地数据库') : '草稿已保存到当前页面会话');
     });
     document.querySelectorAll('.nav button').forEach(button => button.addEventListener('click', () => navigate(button.dataset.page)));
     document.getElementById('policyFilter').addEventListener('input', render);

@@ -68,9 +68,9 @@ def _mock_response(wire: bytes) -> bytes:
     return response.to_wire()
 
 
-def _api(base: str, path: str, payload: dict | None = None) -> tuple[int, dict]:
+def _api(base: str, path: str, payload: dict | None = None, method: str | None = None) -> tuple[int, dict]:
     data = None if payload is None else json.dumps(payload).encode("utf-8")
-    request = urllib.request.Request(base + path, data=data, headers={"Content-Type": "application/json"} if data else {}, method="GET" if data is None else "POST")
+    request = urllib.request.Request(base + path, data=data, headers={"Content-Type": "application/json"} if data else {}, method=method or ("GET" if data is None else "POST"))
     try:
         with urllib.request.urlopen(request, timeout=3) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
@@ -78,11 +78,43 @@ def _api(base: str, path: str, payload: dict | None = None) -> tuple[int, dict]:
         return error.code, json.loads(error.read().decode("utf-8"))
 
 
-def main() -> None:
+def _verify_legacy_migration() -> None:
+    original_path = server.DB_PATH
+    server.DB_PATH = Path(TEMP.name) / "legacy.sqlite3"
     server.init_db()
-    mock_udp = _UDPServer(("127.0.0.1", 0), _MockUDPHandler)
+    with server.connect() as db:
+        stamp = server.now_text()
+        db.executemany(
+            "INSERT INTO policies(name,domain,network,line,priority,action_type,target,ttl,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+            [
+                ("教学平台优选线路", "learn.example.edu.cn", "10.20.0.0/16", "中国联通", 200, "answer", "10.20.8.15", 60, "启用", stamp),
+                ("旧模拟策略", "old.example.test", "10.0.0.0/8", "内网", 100, "answer", "192.0.2.7", 60, "模拟发布", stamp),
+            ],
+        )
+    server.init_db()
+    with server.connect() as db:
+        states = {row["name"]: row["status"] for row in db.execute("SELECT name,status FROM policies")}
+    assert states["教学平台优选线路"] == "待复核"
+    assert states["旧模拟策略"] == "待发布"
+    server.DB_PATH = original_path
+
+
+def main() -> None:
+    _verify_legacy_migration()
+    server.init_db()
+    mock_udp = mock_tcp = None
+    for _ in range(30):
+        candidate_udp = _UDPServer(("127.0.0.1", 0), _MockUDPHandler)
+        try:
+            candidate_tcp = _TCPServer(("127.0.0.1", candidate_udp.server_address[1]), _MockTCPHandler)
+        except OSError:
+            candidate_udp.server_close()
+            continue
+        mock_udp, mock_tcp = candidate_udp, candidate_tcp
+        break
+    if mock_udp is None or mock_tcp is None:
+        raise RuntimeError("Could not reserve a shared mock DNS UDP/TCP port after 30 attempts.")
     mock_port = mock_udp.server_address[1]
-    mock_tcp = _TCPServer(("127.0.0.1", mock_port), _MockTCPHandler)
     mock_threads = [
         threading.Thread(target=mock_udp.serve_forever, daemon=True),
         threading.Thread(target=mock_tcp.serve_forever, daemon=True),
@@ -100,8 +132,14 @@ def main() -> None:
     base = f"http://127.0.0.1:{server.PORT}"
 
     try:
+        server.RUNTIME = None
+        status, unhealthy = _api(base, "/api/health")
+        assert status == 503 and not unhealthy["ok"]
+        server.RUNTIME = runtime
         status, health = _api(base, "/api/health")
         assert status == 200 and health["dns_runtime"]["running"]
+        status, initial = _api(base, "/api/state")
+        assert status == 200 and initial["policies"] == [] and initial["upstreams"] == []
 
         status, _ = _api(base, "/api/upstreams", {"name": "lab-upstream", "servers": [{"address": "127.0.0.1", "port": mock_port}], "is_default": True})
         assert status == 201
@@ -111,6 +149,18 @@ def main() -> None:
         fixed_id = created["policy"]["id"]
         status, _ = _api(base, f"/api/policies/{fixed_id}/enable", {})
         assert status == 200
+
+        edited = {"name": "固定回答验证", "domain": "fixed.example.test", "network": "127.0.0.0/8", "line": "内网", "action_type": "answer", "target": "192.0.2.43", "priority": 500, "ttl": 45}
+        status, _ = _api(base, f"/api/policies/{fixed_id}", edited, method="PUT")
+        assert status == 200
+        edited_answer = dns.query.udp(dns.message.make_query("fixed.example.test", "A"), "127.0.0.1", port=runtime.port, timeout=2)
+        assert edited_answer.answer[0][0].address == "192.0.2.43"
+        status, current = _api(base, "/api/state")
+        assert status == 200 and current["revisions"]
+        status, rolled_back = _api(base, "/api/rollback", {"revision_id": current["revisions"][0]["id"]})
+        assert status == 200 and rolled_back["restored_revision"] == current["revisions"][0]["id"]
+        restored_answer = dns.query.udp(dns.message.make_query("fixed.example.test", "A"), "127.0.0.1", port=runtime.port, timeout=2)
+        assert restored_answer.answer[0][0].address == "192.0.2.42"
 
         status, created = _api(base, "/api/policies", {"name": "后缀转发验证", "domain": "*.route.example.test", "network": "127.0.0.0/8", "line": "教育网", "action_type": "forward", "target": "lab-upstream", "priority": 400, "ttl": 60})
         assert status == 201
@@ -132,6 +182,26 @@ def main() -> None:
         assert apex.answer[0][0].address == "203.0.113.8"
         assert default_tcp.answer[0][0].address == "203.0.113.8"
         assert aaaa.answer[0][0].address == "2001:db8::8"
+
+        status, created = _api(base, "/api/policies", {"name": "待发布应用验证", "domain": "apply.example.test", "network": "127.0.0.0/8", "line": "内网", "action_type": "answer", "target": "192.0.2.99", "priority": 600, "ttl": 30})
+        assert status == 201 and created["policy"]["status"] == "待发布"
+        status, _ = _api(base, "/api/apply", {})
+        assert status == 200
+        applied = dns.query.udp(dns.message.make_query("apply.example.test", "A"), "127.0.0.1", port=listen_port, timeout=2)
+        assert applied.answer[0][0].address == "192.0.2.99"
+        status, current = _api(base, "/api/state")
+        assert status == 200 and current["revisions"]
+        status, _ = _api(base, "/api/rollback", {"revision_id": current["revisions"][0]["id"]})
+        assert status == 200
+        pending_fallback = dns.query.udp(dns.message.make_query("apply.example.test", "A"), "127.0.0.1", port=listen_port, timeout=2)
+        assert pending_fallback.answer[0][0].address == "203.0.113.8"
+
+        status, backup = _api(base, "/api/config/export")
+        assert status == 200 and backup["schema_version"] == "dns-local-config/v1"
+        status, imported = _api(base, "/api/config/import", {"config": backup})
+        assert status == 200 and imported["imported_policies"] == len(backup["policies"])
+        status, _ = _api(base, "/api/config/import", {"config": {"schema_version": "unknown", "policies": [], "upstream_groups": []}})
+        assert status == 400
 
         status, _ = _api(base, f"/api/policies/{fixed_id}/disable", {})
         assert status == 200
@@ -159,6 +229,12 @@ def main() -> None:
             "default_forward_tcp": True,
             "aaaa_falls_back": True,
             "policy_toggle_updates_runtime": True,
+            "policy_edit_and_rollback": True,
+            "pending_apply_and_rollback": True,
+            "config_backup_restore": True,
+            "fresh_database_has_no_demo_policy": True,
+            "legacy_demo_policy_migration": True,
+            "healthcheck_reports_runtime_failure": True,
             "referenced_group_delete_blocked": True,
             "query_logs": len(logs),
             "dnsdist_preview": preview["dnsdist_lab_preview"]["complete_config"],

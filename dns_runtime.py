@@ -70,13 +70,22 @@ class DnsRuntime:
         self.host = host
         self.port = port
         self.timeout = timeout
-        self.udp_server = _UDPServer((host, port), _UDPHandler)
-        self.port = int(self.udp_server.server_address[1])
-        try:
-            self.tcp_server = _TCPServer((host, self.port), _TCPHandler)
-        except Exception:
-            self.udp_server.server_close()
-            raise
+        last_error = None
+        for _ in range(30 if port == 0 else 1):
+            udp_server = _UDPServer((host, port), _UDPHandler)
+            chosen_port = int(udp_server.server_address[1])
+            try:
+                tcp_server = _TCPServer((host, chosen_port), _TCPHandler)
+            except OSError as exc:
+                udp_server.server_close()
+                last_error = exc
+                continue
+            self.udp_server = udp_server
+            self.tcp_server = tcp_server
+            self.port = chosen_port
+            break
+        else:
+            raise last_error or OSError("Unable to reserve a shared DNS UDP/TCP port.")
         self.udp_server.runtime = self
         self.tcp_server.runtime = self
         self.threads: list[threading.Thread] = []
@@ -99,7 +108,7 @@ class DnsRuntime:
 
     def info(self) -> dict:
         return {
-            "running": bool(self.threads),
+            "running": len(self.threads) == 2 and all(thread.is_alive() for thread in self.threads),
             "host": self.host,
             "port": self.port,
             "endpoint": f"{self.host}:{self.port}",
