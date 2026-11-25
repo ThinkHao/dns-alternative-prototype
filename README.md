@@ -90,15 +90,15 @@ macOS / Linux 可运行 `./.venv/bin/python verify_mvp.py`。
 已验证固定 A 的 UDP/TCP 回答、通配后缀上游转发、后缀根域排除、默认组回退、AAAA 回退、查询日志和完整 dnsdist 配置草稿生成。
 Windows 本机、WSL Ubuntu 与 Docker Compose 容器均已启动服务，验证 API、UDP/TCP 查询和日志；容器重启后策略与查询日志仍保留。macOS 实机尚未验证。
 
-dnsdist 2.1.3 已在 Ubuntu 24.04 WSL 通过生成配置语法检查，并以 mock 上游验证固定 A、命名池转发、默认池回退的 UDP/TCP 查询。该检查不包含真实 Recursor、故障切换、QPS、延迟或日志性能；Python DNS 运行时也不能替代生产级递归引擎。
+dnsdist 2.1.3 与 PowerDNS Recursor 5.4.9 已在 Ubuntu 24.04 WSL 通过隔离验证：两个 Recursor 实例各自提供本地测试权威区，dnsdist 固定 A、命名池和默认池路径均通过 UDP/TCP。测试不访问公网 DNS，不代表真实上游集群、故障切换、QPS 或日志性能验证；Python DNS 运行时也不能替代生产级递归引擎。
 
 ## GitHub Actions
 
-工作流位于 `.github/workflows/platform-ci.yml`：每次 push、pull request 或手动触发时，在 Ubuntu、macOS、Windows 上分别用 Python 3.11 和 3.13 运行 DNS 端到端检查；另构建 Compose 镜像，并在 Ubuntu 24.04 安装 PowerDNS dnsdist 2.1 执行配置与 UDP/TCP 查询冒烟。
+工作流位于 `.github/workflows/platform-ci.yml`：每次 push、pull request 或手动触发时，在 Ubuntu、macOS、Windows 上分别用 Python 3.11 和 3.13 运行 DNS 端到端检查；另构建 Compose 镜像，并在 Ubuntu 24.04 安装 PowerDNS dnsdist 2.1 与 Recursor 5.4，检查配置并执行真实 Recursor UDP/TCP 查询冒烟。
 
 ## 下一阶段
 
-引擎选型的临时假设与隔离 PoC 验收门记录在 [ENGINE-POC.md](ENGINE-POC.md)：下一步是在隔离环境接入真实 PowerDNS Recursor，再与 CoreDNS 做同流量对照。策略 JSON 已将固定应答与上游转发区分开；生成的本机完整配置草稿已由 dnsdist 2.1.3 做语法与 mock 查询验证，但仍不能用于生产。
+引擎选型的临时假设与隔离 PoC 验收门记录在 [ENGINE-POC.md](ENGINE-POC.md)：策略 JSON 已将固定应答与上游转发区分开；dnsdist 到 Recursor 的本机路径已用合成测试区验证。下一步是在隔离网络接入真实递归上游并验证超时、健康切换，再做性能对照；当前配置仍不能用于生产。
 
 同时收集现网脱敏配置、峰值流量与验收口径，形成可复现的基准。至少需要确定：
 

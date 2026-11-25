@@ -118,9 +118,84 @@ def _start_upstream(port: int, answer: str) -> tuple[list[object], list[threadin
     return [udp, tcp], threads
 
 
+def _start_recursor(binary: str, work_dir: Path, name: str, port: int, answer_name: str, answer: str) -> tuple[subprocess.Popen, Path]:
+    config_dir = work_dir / name
+    config_dir.mkdir()
+    zone_path = config_dir / "test.zone"
+    owner = answer_name.removesuffix(".test")
+    zone_path.write_text(
+        "$ORIGIN test.\n"
+        "$TTL 60\n"
+        "@ IN SOA ns.test. hostmaster.test. 1 3600 600 86400 60\n"
+        "@ IN NS ns.test.\n"
+        "ns IN A 192.0.2.53\n"
+        f"{owner} IN A {answer}\n",
+        encoding="utf-8",
+    )
+    (config_dir / "recursor.yml").write_text(
+        "incoming:\n"
+        "  listen:\n"
+        f'    - "127.0.0.1:{port}"\n'
+        "  allow_from:\n"
+        '    - "127.0.0.0/8"\n'
+        "recursor:\n"
+        f'  socket_dir: "{config_dir}"\n'
+        "  auth_zones:\n"
+        '    - zone: "test."\n'
+        f'      file: "{zone_path}"\n',
+        encoding="utf-8",
+    )
+    check = subprocess.run(
+        [binary, f"--config-dir={config_dir}", "--config=check"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    if check.returncode:
+        raise RuntimeError(f"pdns_recursor config check failed for {name}:\n{check.stdout}{check.stderr}")
+    log_path = config_dir / "recursor.log"
+    log_file = log_path.open("w", encoding="utf-8")
+    try:
+        process = subprocess.Popen(
+            [binary, f"--config-dir={config_dir}"],
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+        )
+    finally:
+        log_file.close()
+    return process, log_path
+
+
+def _wait_for_answer(process: subprocess.Popen, log_path: Path, name: str, port: int, expected: str, label: str) -> None:
+    deadline = time.monotonic() + 10
+    while True:
+        if process.poll() is not None:
+            raise RuntimeError(f"{label} exited during startup:\n{log_path.read_text(encoding='utf-8')}")
+        try:
+            if _query(name, port, False) == [expected]:
+                return
+        except Exception:
+            pass
+        if time.monotonic() >= deadline:
+            raise TimeoutError(f"{label} did not become ready:\n{log_path.read_text(encoding='utf-8')}")
+        time.sleep(0.1)
+
+
+def _stop_process(process: subprocess.Popen) -> None:
+    if process.poll() is None:
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=5)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--dnsdist", default="dnsdist", help="Path to the dnsdist executable")
+    parser.add_argument("--recursor", help="Optionally use real pdns_recursor upstreams instead of mock servers")
     args = parser.parse_args()
 
     result = compile_lab_config(_artifact())
@@ -153,58 +228,60 @@ def main() -> None:
         print(version.stdout.strip())
         print("dnsdist generated config syntax: PASS")
 
-        pool_ports = result["backend_placeholders"]
         upstreams: list[object] = []
-        threads: list[threading.Thread] = []
-        for name, port in pool_ports.items():
-            answer = "203.0.113.11" if name == "smoke-pool" else "203.0.113.99"
-            servers, started_threads = _start_upstream(template_ports[str(port.rsplit(":", 1)[1])], answer)
-            upstreams.extend(servers)
-            threads.extend(started_threads)
+        recursors: list[tuple[subprocess.Popen, Path]] = []
+        dnsdist_process: subprocess.Popen | None = None
+        try:
+            backends = result["backend_placeholders"]
+            if args.recursor:
+                for name, qname, answer in (
+                    ("smoke-pool", "api.forward.test", "203.0.113.11"),
+                    ("default", "fallback.test", "203.0.113.99"),
+                ):
+                    original_port = backends[name].rsplit(":", 1)[1]
+                    port = template_ports[original_port]
+                    process, recursor_log = _start_recursor(args.recursor, Path(temp_dir), f"recursor-{name}", port, qname, answer)
+                    recursors.append((process, recursor_log))
+                    _wait_for_answer(process, recursor_log, qname, port, answer, f"pdns_recursor {name}")
+                recursor_version = subprocess.run([args.recursor, "--version"], check=True, capture_output=True, text=True, timeout=10)
+                print(recursor_version.stdout.splitlines()[0])
+            else:
+                for name, address in backends.items():
+                    answer = "203.0.113.11" if name == "smoke-pool" else "203.0.113.99"
+                    port = template_ports[address.rsplit(":", 1)[1]]
+                    servers, _ = _start_upstream(port, answer)
+                    upstreams.extend(servers)
 
-        with log_path.open("w", encoding="utf-8") as log_file:
-            process = subprocess.Popen(
-                [args.dnsdist, "--supervised", "--disable-syslog", "--config", str(config_path)],
-                stdout=log_file,
-                stderr=subprocess.STDOUT,
-            )
-            try:
-                listener_port = template_ports["5300"]
-                deadline = time.monotonic() + 10
-                while True:
-                    if process.poll() is not None:
-                        raise RuntimeError(f"dnsdist exited during startup:\n{log_path.read_text(encoding='utf-8')}")
-                    try:
-                        if _query("fixed.test", listener_port, False) == ["192.0.2.55"]:
-                            break
-                    except Exception:
-                        pass
-                    if time.monotonic() >= deadline:
-                        raise TimeoutError(f"dnsdist did not become ready:\n{log_path.read_text(encoding='utf-8')}")
-                    time.sleep(0.1)
+            with log_path.open("w", encoding="utf-8") as log_file:
+                dnsdist_process = subprocess.Popen(
+                    [args.dnsdist, "--supervised", "--disable-syslog", "--config", str(config_path)],
+                    stdout=log_file,
+                    stderr=subprocess.STDOUT,
+                )
 
-                cases = [
-                    ("fixed.test", "192.0.2.55"),
-                    ("api.forward.test", "203.0.113.11"),
-                    ("fallback.test", "203.0.113.99"),
-                ]
-                for tcp in (False, True):
-                    for name, expected in cases:
-                        actual = _query(name, listener_port, tcp)
-                        if actual != [expected]:
-                            transport = "TCP" if tcp else "UDP"
-                            raise AssertionError(f"{transport} {name}: expected {expected}, got {actual}")
-                print("dnsdist runtime smoke (fixed A, named pool, default pool; UDP/TCP): PASS")
-            finally:
-                process.terminate()
-                try:
-                    process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait(timeout=5)
-                for upstream in upstreams:
-                    upstream.shutdown()
-                    upstream.server_close()
+            listener_port = template_ports["5300"]
+            _wait_for_answer(dnsdist_process, log_path, "fixed.test", listener_port, "192.0.2.55", "dnsdist")
+            cases = [
+                ("fixed.test", "192.0.2.55"),
+                ("api.forward.test", "203.0.113.11"),
+                ("fallback.test", "203.0.113.99"),
+            ]
+            for tcp in (False, True):
+                for name, expected in cases:
+                    actual = _query(name, listener_port, tcp)
+                    if actual != [expected]:
+                        transport = "TCP" if tcp else "UDP"
+                        raise AssertionError(f"{transport} {name}: expected {expected}, got {actual}")
+            backend_type = "real Recursor" if args.recursor else "mock upstream"
+            print(f"dnsdist runtime smoke ({backend_type}; fixed A, named pool, default pool; UDP/TCP): PASS")
+        finally:
+            if dnsdist_process is not None:
+                _stop_process(dnsdist_process)
+            for upstream in upstreams:
+                upstream.shutdown()
+                upstream.server_close()
+            for process, _ in recursors:
+                _stop_process(process)
 
 
 if __name__ == "__main__":
