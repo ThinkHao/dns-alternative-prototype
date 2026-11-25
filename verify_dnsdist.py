@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import json
+import os
+import re
 import socket
 import socketserver
 import struct
@@ -129,6 +133,7 @@ def _start_recursor(binary: str, work_dir: Path, name: str, port: int, answer_na
         "@ IN SOA ns.test. hostmaster.test. 1 3600 600 86400 60\n"
         "@ IN NS ns.test.\n"
         "ns IN A 192.0.2.53\n"
+        "health IN A 192.0.2.44\n"
         f"{owner} IN A {answer}\n",
         encoding="utf-8",
     )
@@ -192,6 +197,46 @@ def _stop_process(process: subprocess.Popen) -> None:
             process.wait(timeout=5)
 
 
+def _server_state(binary: str, client_config: Path, name: str) -> str | None:
+    result = subprocess.run(
+        [binary, "--config", str(client_config), "--client", "--execute", "showServers()"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+    if result.returncode:
+        raise RuntimeError(f"dnsdist console command failed:\n{result.stdout}{result.stderr}")
+    for line in result.stdout.splitlines():
+        if name in line:
+            states = re.findall(r"(?<![A-Za-z])(UP|DOWN|up|down)(?![A-Za-z])", line)
+            if states:
+                return states[-1].lower()
+    return None
+
+
+def _wait_for_server_state(binary: str, client_config: Path, name: str, expected: str) -> None:
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        if _server_state(binary, client_config, name) == expected:
+            return
+        time.sleep(0.2)
+    raise TimeoutError(f"dnsdist backend {name} did not become {expected}")
+
+
+def _wait_for_query(name: str, port: int, expected: str, tcp: bool = False) -> None:
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        try:
+            if _query(name, port, tcp) == [expected]:
+                return
+        except Exception:
+            pass
+        time.sleep(0.1)
+    transport = "TCP" if tcp else "UDP"
+    raise TimeoutError(f"dnsdist {transport} query {name} did not return {expected}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--dnsdist", default="dnsdist", help="Path to the dnsdist executable")
@@ -208,11 +253,39 @@ def main() -> None:
     config = result["config"]
     for old_port, new_port in template_ports.items():
         config = config.replace(f"127.0.0.1:{old_port}", f"127.0.0.1:{new_port}")
+    used_ports = set(template_ports.values())
+    extra_ports: dict[str, int] = {}
+    for name in ("failed_backend", "console"):
+        port = _reserve_port()
+        while port in used_ports:
+            port = _reserve_port()
+        extra_ports[name] = port
+        used_ports.add(port)
+
+    default_entry = f'newServer({{address="127.0.0.1:{template_ports["5399"]}"}})'
+    pool_entry = f'newServer({{address="127.0.0.1:{template_ports["5301"]}", pool="smoke-pool"}})'
+    default_server = f'newServer({{address="127.0.0.1:{template_ports["5399"]}", name="smoke-default", checkName="health.test.", checkType="A", checkInterval=1, checkTimeout=500}})'
+    pool_server = f'newServer({{address="127.0.0.1:{template_ports["5301"]}", pool="smoke-pool", name="smoke-good", checkName="health.test.", checkType="A", checkInterval=1, checkTimeout=500}})'
+    if default_entry not in config or pool_entry not in config:
+        raise RuntimeError("dnsdist test config did not contain the expected backend declarations")
+    config = config.replace(default_entry, default_server, 1).replace(pool_entry, pool_server, 1)
+    config += (
+        f'\nnewServer({{address="127.0.0.1:{extra_ports["failed_backend"]}", pool="smoke-pool", name="smoke-failed", '
+        'checkName="health.test.", checkType="A", checkInterval=1, checkTimeout=500})\n'
+    )
+    console_key = base64.b64encode(os.urandom(32)).decode("ascii")
+    console_address = f'127.0.0.1:{extra_ports["console"]}'
+    config += f"\nsetKey({json.dumps(console_key)})\ncontrolSocket({json.dumps(console_address)})\n"
 
     with tempfile.TemporaryDirectory(prefix="dnsdist-engine-verify-") as temp_dir:
         config_path = Path(temp_dir) / "dnsdist.conf"
+        console_config_path = Path(temp_dir) / "dnsdist-console.conf"
         log_path = Path(temp_dir) / "dnsdist.log"
         config_path.write_text(config, encoding="utf-8")
+        console_config_path.write_text(
+            f"setKey({json.dumps(console_key)})\ncontrolSocket({json.dumps(console_address)})\n",
+            encoding="utf-8",
+        )
 
         check = subprocess.run(
             [args.dnsdist, "--check-config", "--config", str(config_path)],
@@ -261,6 +334,7 @@ def main() -> None:
 
             listener_port = template_ports["5300"]
             _wait_for_answer(dnsdist_process, log_path, "fixed.test", listener_port, "192.0.2.55", "dnsdist")
+            _wait_for_server_state(args.dnsdist, console_config_path, "smoke-failed", "down")
             cases = [
                 ("fixed.test", "192.0.2.55"),
                 ("api.forward.test", "203.0.113.11"),
@@ -274,6 +348,35 @@ def main() -> None:
                         raise AssertionError(f"{transport} {name}: expected {expected}, got {actual}")
             backend_type = "real Recursor" if args.recursor else "mock upstream"
             print(f"dnsdist runtime smoke ({backend_type}; fixed A, named pool, default pool; UDP/TCP): PASS")
+
+            if args.recursor:
+                recovery, recovery_log = _start_recursor(
+                    args.recursor,
+                    Path(temp_dir),
+                    "recursor-recovered",
+                    extra_ports["failed_backend"],
+                    "api.forward.test",
+                    "203.0.113.12",
+                )
+                recursors.append((recovery, recovery_log))
+                _wait_for_answer(
+                    recovery,
+                    recovery_log,
+                    "api.forward.test",
+                    extra_ports["failed_backend"],
+                    "203.0.113.12",
+                    "pdns_recursor recovery",
+                )
+            else:
+                servers, _ = _start_upstream(extra_ports["failed_backend"], "203.0.113.12")
+                upstreams.extend(servers)
+
+            _wait_for_server_state(args.dnsdist, console_config_path, "smoke-failed", "up")
+            _wait_for_query("api.forward.test", listener_port, "203.0.113.12")
+            tcp_answer = _query("api.forward.test", listener_port, True)
+            if tcp_answer not in (["203.0.113.11"], ["203.0.113.12"]):
+                raise AssertionError(f"TCP api.forward.test returned unexpected pool answer: {tcp_answer}")
+            print("dnsdist backend health failure, failover, and recovery (UDP/TCP): PASS")
         finally:
             if dnsdist_process is not None:
                 _stop_process(dnsdist_process)
