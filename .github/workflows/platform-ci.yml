@@ -67,3 +67,34 @@ jobs:
 
       - name: Build container image
         run: docker compose build
+
+  dnsdist-engine:
+    name: dnsdist config and runtime smoke
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install Python dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+
+      - name: Install dnsdist 2.1 from the PowerDNS repository
+        shell: bash
+        run: |
+          sudo install -d -m 0755 /etc/apt/keyrings
+          curl -fsSL https://repo.powerdns.com/FD380FBB-pub.asc -o /tmp/dnsdist-pub.asc
+          sudo install -m 0644 /tmp/dnsdist-pub.asc /etc/apt/keyrings/dnsdist-21-pub.asc
+          echo 'deb [signed-by=/etc/apt/keyrings/dnsdist-21-pub.asc] http://repo.powerdns.com/ubuntu noble-dnsdist-21 main' | sudo tee /etc/apt/sources.list.d/dnsdist.list >/dev/null
+          printf 'Package: dnsdist*\nPin: origin repo.powerdns.com\nPin-Priority: 600\n' | sudo tee /etc/apt/preferences.d/dnsdist-21 >/dev/null
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y dnsdist
+
+      - name: Check generated config and run DNS smoke queries
+        run: python verify_dnsdist.py
