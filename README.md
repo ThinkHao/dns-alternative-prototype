@@ -1,12 +1,13 @@
 # 域衡 DNS 替代品
 
-当前版本：**0.4.0**。这是一个可独立部署的单机 DNS 转发与策略服务，包含本机管理控制台、SQLite 配置库、UDP/TCP DNS 运行时、策略校验/应用、配置备份恢复和容器发布工件。
+当前版本：**0.4.1**。这是一个可独立部署的单机 DNS 转发与策略服务，包含本机管理控制台、SQLite 配置库、UDP/TCP DNS 运行时、策略校验/应用、配置备份恢复和容器发布工件。
 
 ## 功能范围
 
 - 按客户端 IPv4 CIDR、域名精确匹配或通配后缀、优先级匹配策略。
 - 固定 A 应答，或转发到可配置的 IPv4 DNS 上游组；支持默认回退组与多上游故障重试。
 - DNS 使用 UDP/TCP；日志保留最近 2000 条，界面显示最近 200 条。
+- 容器收到 SIGTERM 时会正常关闭 API 与 DNS 服务，便于安全停止和升级。
 - 策略支持新增、编辑、启停、删除和待发布策略校验后应用到本机 DNS。
 - 策略/上游组变更前自动保存配置快照，可回滚；控制台可导入/导出 JSON 配置备份。
 - 默认空配置启动，不预置示例 A 记录或公共 DNS 上游。
@@ -28,7 +29,7 @@ cp .env.example .env
 编辑 `.env`，至少设置发布版本。要作为局域网 DNS 使用时，再设置 DNS 监听地址和宿主机端口：
 
 ```dotenv
-DNS_ALT_VERSION=v0.4.0
+DNS_ALT_VERSION=v0.4.1
 DNS_ALT_API_PORT=8765
 DNS_ALT_BIND_ADDRESS=0.0.0.0
 DNS_ALT_HOST_DNS_PORT=53
@@ -58,7 +59,7 @@ SQLite 位于持久卷 `dns-data`。`docker compose down` 不会删除数据；�
 升级时先在控制台导出配置备份，再指定新版本并拉取：
 
 ```sh
-# 修改 .env 中 DNS_ALT_VERSION，例如改为 v0.4.1
+# 修改 .env 中 DNS_ALT_VERSION，例如改为 v0.4.2
 docker compose --env-file .env -f compose.release.yml pull
 docker compose --env-file .env -f compose.release.yml up -d
 ```
@@ -124,7 +125,7 @@ python verify_mvp.py
 
 dnsdist/PowerDNS Recursor 引擎隔离验证由 `verify_dnsdist.py --recursor pdns_recursor` 执行。GitHub Actions 的 `platform-ci.yml` 在 Windows/macOS/Linux 的 Python 3.11 和 3.13 矩阵运行端到端检查，并构建 Compose 镜像、验证 dnsdist/Recursor 实际查询及后端故障恢复。
 
-当前正式版为 [v0.4.0](https://github.com/ThinkHao/dns-alternative-prototype/releases/tag/v0.4.0)，GHCR 镜像 `ghcr.io/thinkhao/dns-alternative-prototype:v0.4.0` 已验证可匿名读取 amd64/arm64 镜像清单。发布时更新 `VERSION`，提交后创建同名 tag（例如 `v0.4.1`）；`release.yml` 检查 tag 与 `VERSION` 一致，构建并推送 `linux/amd64`、`linux/arm64` 镜像到 GHCR，再创建 GitHub Release。GHCR 的公开容器包允许匿名拉取；若在包设置中改为私有，部署主机需先登录 GHCR。[GitHub Packages 权限与公开镜像说明](https://docs.github.com/en/packages/learn-github-packages/about-permissions-for-github-packages)
+当前正式版为 [v0.4.1](https://github.com/ThinkHao/dns-alternative-prototype/releases/tag/v0.4.1)，GHCR 镜像 `ghcr.io/thinkhao/dns-alternative-prototype:v0.4.1` 已验证可匿名读取 amd64/arm64 镜像清单。发布时更新 `VERSION`，提交后创建同名 tag；`release.yml` 检查 tag 与 `VERSION` 一致，构建并推送 `linux/amd64`、`linux/arm64` 镜像到 GHCR，再创建 GitHub Release。GHCR 的公开容器包允许匿名拉取；若在包设置中改为私有，部署主机需先登录 GHCR。[GitHub Packages 权限与公开镜像说明](https://docs.github.com/en/packages/learn-github-packages/about-permissions)
 
 ## 产品参考
 

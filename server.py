@@ -7,6 +7,7 @@ import ipaddress
 import json
 import os
 import re
+import signal
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -636,6 +637,10 @@ class Handler(SimpleHTTPRequestHandler):
         return self.send_json(200, {"state": read_state(), "imported_policies": len(config["policies"]), "imported_upstreams": len(config["upstream_groups"])})
 
 
+def _handle_sigterm(_signum, _frame) -> None:
+    raise KeyboardInterrupt
+
+
 def main() -> None:
     global RUNTIME
     init_db()
@@ -647,6 +652,7 @@ def main() -> None:
     except Exception:
         server.server_close()
         raise
+    signal.signal(signal.SIGTERM, _handle_sigterm)
     print(f"域衡 DNS MVP 控制台：http://127.0.0.1:{PORT}")
     print(f"DNS 查询入口：{DNS_HOST}:{DNS_PORT}（UDP/TCP）")
     try:
